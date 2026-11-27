@@ -15,17 +15,26 @@ import { createWorld, routePoint, groundHeight, roadLengths } from "./world.js";
 import { createSoftwareView } from "./software-view.js";
 import { DriftMarks } from "./skidmarks.js";
 import { RoadBeacons } from "./beacons.js";
+import { StreetLights } from "./streetlights.js";
 import { DriveEffects } from "./postfx.js";
 
 const skyVertex =
   "varying vec3 ray; void main(){ray=position;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}";
-const skyFragment = `varying vec3 ray;uniform float night;uniform float clock;
+const skyFragment = `varying vec3 ray;
+uniform float night,clock,golden; uniform vec3 skyTop,skyHorizon,sunDirection,sunColor;
 float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.545);}
 float noise(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);return mix(mix(hash(i),hash(i+vec2(1,0)),f.x),mix(hash(i+vec2(0,1)),hash(i+1.),f.x),f.y);}
-void main(){vec3 d=normalize(ray);float h=max(0.,d.y);vec3 day=mix(vec3(.83,.84,.76),vec3(.12,.44,.73),pow(h,.44));
-vec2 uv=d.xz/max(.08,d.y)*2.6+clock*.006;float clouds=noise(uv)*.54+noise(uv*2.1)*.29+noise(uv*4.7)*.17;day=mix(day,vec3(.97,.94,.84),smoothstep(.56,.73,clouds)*.53*smoothstep(.02,.17,h));
-float sun=max(0.,dot(d,normalize(vec3(-.44,.49,-.74))));day+=vec3(1.,.75,.41)*(pow(sun,35.)*.29+smoothstep(.9990,.9998,sun));
-vec3 dusk=mix(vec3(.16,.17,.23),vec3(.012,.024,.061),pow(h,.55));float star=step(.998,hash(floor(d.xz/max(.1,h)*380.)))*smoothstep(.1,.5,h);gl_FragColor=vec4(mix(day,dusk+star*.65,night),1.);}`;
+void main(){
+ vec3 d=normalize(ray);float h=max(0.,d.y);
+ vec3 color=mix(skyHorizon,skyTop,pow(h,.48));
+ vec2 uv=d.xz/max(.07,h)*2.6+clock*.006;
+ float clouds=noise(uv)*.54+noise(uv*2.1)*.29+noise(uv*4.7)*.17;
+ vec3 cloud=mix(vec3(.98,.96,.88),vec3(1.,.59,.40),golden*.65);
+ color=mix(color,mix(cloud,skyTop*.8,night),smoothstep(.56,.75,clouds)*.48*smoothstep(.018,.15,h));
+ float sun=max(0.,dot(d,sunDirection));color+=sunColor*(pow(sun,25.)*.23+pow(sun,380.)*.35+smoothstep(.9996,.99995,sun))*(1.-night);
+ float star=step(.998,hash(floor(d.xz/max(.1,h)*380.)))*smoothstep(.15,.5,h);
+ color+=star*.52*night*night;gl_FragColor=vec4(color,1.);
+}`;
 function place(obj, point, offset = 0) {
   obj.position.set(
     point.x + Math.cos(point.heading) * offset,
@@ -178,14 +187,39 @@ export class RaceGraphics {
           depthWrite: false,
           vertexShader: skyVertex,
           fragmentShader: skyFragment,
-          uniforms: { night: { value: 0 }, clock: { value: 0 } },
+          uniforms: {
+            night: { value: 0 },
+            clock: { value: 0 },
+            golden: { value: 0 },
+            skyTop: { value: new THREE.Color() },
+            skyHorizon: { value: new THREE.Color() },
+            sunColor: { value: new THREE.Color() },
+            sunDirection: { value: new THREE.Vector3() },
+          },
         }),
       );
       s.add(this.sky);
       this.hemi = new THREE.HemisphereLight(0xe3f1ff, 0xb49f86, 1.9);
       s.add(this.hemi);
       this.sun = new THREE.DirectionalLight(0xffe5bb, 2.7);
+      this.sun.shadow.mapSize.set(1024, 1024);
+      Object.assign(this.sun.shadow.camera, {
+        left: -48,
+        right: 48,
+        top: 48,
+        bottom: -48,
+        near: 2,
+        far: 270,
+      });
+      this.sun.shadow.camera.updateProjectionMatrix();
+      this.sun.shadow.bias = -0.00035;
+      this.sun.shadow.normalBias = 0.055;
+      r.shadowMap.type = THREE.PCFSoftShadowMap;
       s.add(this.sun, this.sun.target);
+      this.streetLights = new StreetLights(
+        s,
+        this.world.group.userData.streetlamps,
+      );
       this.car = createVehicle(look);
       s.add(this.car.group);
       this.fx = exhaust(s);
@@ -303,6 +337,8 @@ export class RaceGraphics {
         ),
       );
       this.renderer.setSize(w, h, false);
+      this.renderer.shadowMap.enabled =
+        this.profile.settings.quality === "High";
       if (this.profile.settings.quality === "High") {
         this.effects ??= new DriveEffects(
           this.renderer,
@@ -444,7 +480,8 @@ export class RaceGraphics {
     }
     return { pursuit };
   }
-  render(dt, p, night, waypoint, mission) {
+  render(dt, p, daylight, waypoint, mission) {
+    const { night, direction } = daylight;
     const t = this.time;
     this.world.update(t, night, p);
     if (!this.renderer) {
@@ -476,23 +513,41 @@ export class RaceGraphics {
         mission,
         this.parts,
         this.overlays,
+        daylight,
       );
       return;
     }
     const s = this.scene;
     this.sky.position.set(p.x, p.y, p.z);
-    this.sky.material.uniforms.night.value = night;
-    this.sky.material.uniforms.clock.value = t;
-    this.hemi.intensity = 1.9 - night * 1.43;
-    this.sun.intensity = 2.7 - night * 2.5;
-    this.sun.position.set(p.x - 100, p.y + 130, p.z - 145);
-    this.sun.target.position.set(p.x, p.y, p.z);
-    s.fog.color.setRGB(
-      0.58 - night * 0.52,
-      0.65 - night * 0.58,
-      0.65 - night * 0.53,
+    const uniforms = this.sky.material.uniforms;
+    uniforms.night.value = night;
+    uniforms.clock.value = t;
+    uniforms.golden.value = daylight.golden;
+    uniforms.skyTop.value.fromArray(daylight.sky).multiplyScalar(1 / 255);
+    uniforms.skyHorizon.value
+      .fromArray(daylight.horizon)
+      .multiplyScalar(1 / 255);
+    uniforms.sunColor.value
+      .fromArray(daylight.sunColor)
+      .multiplyScalar(1 / 255);
+    uniforms.sunDirection.value.fromArray(direction);
+    this.hemi.intensity = daylight.skyStrength;
+    this.hemi.color.setRGB(0.87 - night * 0.52, 0.93 - night * 0.46, 1);
+    this.sun.intensity = daylight.sunStrength;
+    this.sun.castShadow =
+      this.renderer.shadowMap.enabled && daylight.sunStrength > 0.12;
+    this.sun.color.copy(uniforms.sunColor.value).convertSRGBToLinear();
+    this.sun.position.set(
+      p.x + direction[0] * 190,
+      p.y + direction[1] * 190,
+      p.z + direction[2] * 190,
     );
-    s.environmentIntensity = 0.67 - night * 0.38;
+    this.sun.target.position.set(p.x, p.y, p.z);
+    s.fog.color
+      .fromArray(daylight.haze)
+      .multiplyScalar(1 / 255)
+      .convertSRGBToLinear();
+    s.environmentIntensity = 0.7 - night * 0.53;
     this.car.group.position.set(p.x, p.y + 0.06, p.z);
     this.car.group.rotation.order = "YXZ";
     this.car.group.rotation.set(p.pitch, p.heading, p.roll, "YXZ");
@@ -518,12 +573,15 @@ export class RaceGraphics {
       this.car.group.visible = true;
       this.controller.snap = true;
     }
-    if (this.effects) this.effects.render(p, night);
+    this.streetLights.update(daylight.lamps, p, this.camera);
+    if (this.effects) this.effects.render(p, night, direction);
     else this.renderer.render(s, this.camera);
   }
   dispose() {
     this.size.disconnect();
     this.software?.dispose();
+    this.streetLights?.dispose();
+    this.sun?.shadow.dispose();
     this.marks.dispose();
     this.beacons.dispose();
     this.effects?.dispose();

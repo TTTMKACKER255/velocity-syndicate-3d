@@ -1,3 +1,4 @@
+import { timeModes } from "./daylight.js";
 import "../ui/style.css";
 import { icon, logo } from "../ui/icons.js";
 import {
@@ -343,7 +344,14 @@ function settingsDialog() {
     "Settings",
     line("Game sound", group("sound", binary, s.sound)) +
       line("Spoken dispatch", group("voice", binary, s.voice)) +
-      line("Day / night cycle", group("cycle", binary, s.cycle)) +
+      line(
+        "Time of day",
+        group(
+          "timeOfDay",
+          timeModes.map((mode) => [mode, mode]),
+          s.timeOfDay,
+        ),
+      ) +
       line(
         "Speed units",
         group(
@@ -955,7 +963,7 @@ function hudMarkup() {
     label +
     "</button>";
   return (
-    '<div class="drive"><div id="viewport" class="viewport"></div><div class="hud"><div class="hud-top"><div class="hud-block"><div class="eyebrow" id="race-type">Free roam</div><h2 id="race-name">Coastal Highway</h2><p id="race-progress"></p><p class="gps-readout" id="gps-readout"></p></div><div class="hud-ops">' +
+    '<div class="drive"><div id="viewport" class="viewport"></div><div class="hud"><div class="hud-top"><div class="hud-block"><div class="drive-status"><div class="eyebrow" id="race-type">Free roam</div><span id="world-time"></span></div><h2 id="race-name">Coastal Highway</h2><p id="race-progress"></p><p class="gps-readout" id="gps-readout"></p></div><div class="hud-ops">' +
     iconBtn("radio-menu", "Bay FM radio", "radio") +
     iconBtn("map", "World map (M)", "map") +
     iconBtn("camera", "Change camera (C)", "camera") +
@@ -973,7 +981,7 @@ function hudMarkup() {
 }
 let hudRefs = {},
   miniDraw;
-function updateHud(p, m, wp, near, district) {
+function updateHud(p, m, wp, near, district, daylight) {
   const h = hudRefs;
   if (!h.speed) return;
   h.speed.textContent = Math.round(
@@ -988,6 +996,7 @@ function updateHud(p, m, wp, near, district) {
     ? ["", "Boost", "Overdrive", "Shockwave"][p.boostStage]
     : Math.round(p.nitro * 100) + "%";
   h.district.textContent = district;
+  h["world-time"].textContent = daylight.label + " · " + daylight.time;
   h["race-name"].textContent = m ? m.event.name : district;
   h["race-type"].textContent = m ? m.event.type : "Free roam";
   h["race-progress"].textContent = m

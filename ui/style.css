@@ -1538,3 +1538,23 @@ dialog .primary {
     gap: 6px;
   }
 }
+
+.drive-status {
+  display: flex;
+  align-items: baseline;
+  gap: 0.85rem;
+}
+#world-time {
+  color: #f2ddba;
+  font:
+    600 0.72rem Barlow,
+    sans-serif;
+  font-variant-numeric: tabular-nums;
+}
+.dialog-line:has([data-act^="setting:timeOfDay"]) {
+  flex-wrap: wrap;
+  gap: 0.42rem 0.8rem;
+}
+.dialog-line:has([data-act^="setting:timeOfDay"]) .segmented {
+  flex-wrap: wrap;
+}

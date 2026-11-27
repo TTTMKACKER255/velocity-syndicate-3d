@@ -1,3 +1,4 @@
+import { timeModes } from "./daylight.js";
 export const cars = [
   {
     id: "coupe",
@@ -117,7 +118,7 @@ const defaults = () => ({
     voice: false,
     quality: "Balanced",
     units: "km/h",
-    cycle: true,
+    timeOfDay: "Auto",
   },
 });
 export function readProfile() {
@@ -130,6 +131,9 @@ export function readProfile() {
       ...raw,
       settings: { ...fresh.settings, ...raw.settings },
     };
+    if (!timeModes.includes(raw.settings?.timeOfDay))
+      p.settings.timeOfDay = raw.settings?.cycle === false ? "Day" : "Auto";
+    delete p.settings.cycle;
     p.owned = Array.isArray(p.owned)
       ? p.owned.filter((id) => cars.some((c) => c.id === id))
       : ["coupe"];

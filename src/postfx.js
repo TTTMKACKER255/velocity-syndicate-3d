@@ -52,9 +52,9 @@ export class DriveEffects {
     this.composer.setPixelRatio(this.renderer.getPixelRatio());
     this.composer.setSize(w, h);
   }
-  render(driver, night) {
+  render(driver, night, direction) {
     this.sun
-      .set(-0.44, 0.49, -0.74)
+      .fromArray(direction)
       .multiplyScalar(1200)
       .add(this.camera.position)
       .project(this.camera);

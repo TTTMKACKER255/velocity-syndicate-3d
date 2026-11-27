@@ -1,3 +1,4 @@
+import { daylightAt, solarHour } from "./daylight.js";
 import { STEP, newDriver, stepVehicle, vehicleStats } from "./physics.js";
 import { RaceGraphics } from "./graphics.js";
 import { activeCar, currentLook, saveProfile } from "./profile.js";
@@ -254,12 +255,17 @@ export class Session {
     )
       this.lastPose = { x: p.x, z: p.z, heading: p.heading, height: p.y };
     this.audio.update(p, inp.throttle);
-    const phase = this.clock / 220 + (m?.event.id === "city" ? Math.PI : 0),
-      night = this.profile.settings.cycle ? (1 - Math.cos(phase)) * 0.5 : 0;
-    this.graphics.render(dt, p, night, wp, m);
+    const daylight = daylightAt(
+      solarHour(
+        this.clock,
+        this.profile.settings.timeOfDay,
+        m?.event.id === "city",
+      ),
+    );
+    this.graphics.render(dt, p, daylight, wp, m);
     if (this.clock - this.hudAt > 0.084) {
       this.hudAt = this.clock;
-      this.hooks.hud(p, m, wp, this.nearest(), this.district());
+      this.hooks.hud(p, m, wp, this.nearest(), this.district(), daylight);
     }
   }
   district() {

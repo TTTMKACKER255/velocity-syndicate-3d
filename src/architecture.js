@@ -487,7 +487,13 @@ export function createArchitecture(root) {
           "Storefront " + key,
           node,
         );
-        if (m && i === 2) m.renderOrder = 2;
+        if (m) {
+          // The interior stays visible through glass. Only solid furnishings and
+          // window frames cast shadows into the room.
+          m.castShadow = i < 2;
+          m.receiveShadow = i < 2;
+          if (i === 2) m.renderOrder = 2;
+        }
       });
     if (actorCount) {
       // Only shells near the driver need live figures. Slots are compacted at
@@ -504,7 +510,12 @@ export function createArchitecture(root) {
       node.add(actorsMesh);
     }
   }
-  function update(time, viewer) {
+  function update(time, viewer, darkness = 0) {
+    // Warm bounced light in occupied interiors remains after the sun sets.
+    for (const material of materials.slice(0, 2)) {
+      material.emissive.setHex(0xffc890);
+      material.emissiveIntensity = darkness * 0.067;
+    }
     if (!actorsMesh) return;
     let i = 0;
     const focus = viewer || { x: 260, z: 260 };
@@ -575,7 +586,7 @@ export function paintArchitecture(part, d, view) {
     line(
       part.a,
       part.b,
-      tint(part.c, d, 1.02),
+      tint(part.c, d, 1.02, 0.41),
       Math.max(0.6, (part.w * f) / Math.max(d, 0.2)),
     );
     return;
@@ -584,7 +595,7 @@ export function paintArchitecture(part, d, view) {
     const screen = projected(part.x, part.y, part.z);
     if (!screen) return;
     const px = f / Math.max(1, d);
-    ctx.fillStyle = tint(part.c, d, 1.0);
+    ctx.fillStyle = tint(part.c, d, 1.0, 0.41);
     ctx.beginPath();
     ctx.ellipse(
       screen[0],
@@ -598,5 +609,5 @@ export function paintArchitecture(part, d, view) {
     ctx.fill();
     return;
   }
-  block({ ...part, a: 0 }, d);
+  block({ ...part, a: 0, glow: part.type === "light" ? 1.4 : 0.32 }, d);
 }
