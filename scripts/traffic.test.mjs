@@ -116,7 +116,9 @@ test("a fixed driving step deforms only the struck instance and publishes damage
   Object.assign(sim, {
     playerBody: new THREE.Group(),
     world: { surface: () => ({ height: target.y - 0.07 }) },
-    traffic: [{ mesh: hitCar, body, road: 0, dist: 100, speed: 9 }],
+    traffic: [
+      { mesh: hitCar, body, road: 0, dist: 100, direction: 1, speed: 9 },
+    ],
     rival: new THREE.Group(),
     interceptor: new THREE.Group(),
   });

@@ -218,17 +218,23 @@ export class RaceGraphics {
     ];
     this.traffic = Array.from({ length: 18 }, (_, i) => {
       const road = i < 9 ? 0 : i < 12 ? 1 : i < 15 ? 2 : i - 12;
-      const dist = roadLengths[road] * ((i * 0.181 + 0.13) % 1);
+      const dist =
+        i === 0
+          ? 61
+          : i === 1
+            ? 151
+            : roadLengths[road] * ((i * 0.181 + 0.13) % 1);
+      const direction = i % 3 === 1 ? -1 : 1;
       const mesh = createTrafficModel(palette[i % palette.length], i % 7);
       const body = trafficBody(
-        lanePose(routePoint(road, dist)),
+        lanePose(routePoint(road, dist), 3.1, direction),
         1320 + (i % 5) * 115,
         mesh.userData,
       );
       mesh.position.set(body.x, body.y, body.z);
       mesh.rotation.y = body.heading;
       s.add(mesh);
-      return { mesh, body, road, dist, speed: 9 + (i % 6) * 2 };
+      return { mesh, body, road, dist, direction, speed: 9 + (i % 6) * 2 };
     });
     this.rival = createTrafficModel(0xb83228, "hyper");
     this.interceptor = createTrafficModel(0x222b37, "gt");
@@ -358,8 +364,12 @@ export class RaceGraphics {
       mesh.rotation.y = body.heading;
     };
     for (const car of this.traffic) {
-      car.dist += dt * car.speed;
-      update(car.mesh, car.body, lanePose(routePoint(car.road, car.dist)));
+      car.dist += dt * car.speed * car.direction;
+      update(
+        car.mesh,
+        car.body,
+        lanePose(routePoint(car.road, car.dist), 3.1, car.direction),
+      );
     }
     this.rival.visible = mission?.event.id === "canyon";
     if (this.rival.visible) {

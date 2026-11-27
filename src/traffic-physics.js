@@ -17,12 +17,13 @@ export function trafficBody(target, mass = 1480, shape = {}) {
   };
 }
 
-export function lanePose(point, lane = 3.1) {
+export function lanePose(point, lane = 3.1, direction = 1) {
+  const heading = point.heading + (direction < 0 ? Math.PI : 0);
   return {
-    x: point.x + Math.cos(point.heading) * lane,
-    z: point.z - Math.sin(point.heading) * lane,
+    x: point.x + Math.cos(heading) * lane,
+    z: point.z - Math.sin(heading) * lane,
     y: point.height + 0.07,
-    heading: point.heading,
+    heading,
   };
 }
 
