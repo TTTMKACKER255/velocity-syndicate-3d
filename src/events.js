@@ -119,12 +119,14 @@ export const smashEvent = {
     "The syndicate bought two more billboards on the docks. Take them down.",
 };
 export const activities = [...events, stuntEvent, speedEvent, smashEvent];
-export function storyLine(complete){
- const won=new Set(complete.map(e=>e.id));
- if(won.size===3)return 'The syndicate has fallen. Aurelia Bay is yours.';
- if(!won.has('coast'))return 'Rookie, the coast is clear. Take the Coastal Rush contract to prove yourself.';
- if(!won.has('city'))return 'The syndicate knows your name. A prototype just arrived downtown.';
- return 'Vale is waiting in the canyon. Bring your fastest car.';
+export function storyLine(complete) {
+  const won = new Set(complete.map((e) => e.id));
+  if (won.size === 3) return "The syndicate has fallen. Aurelia Bay is yours.";
+  if (!won.has("coast"))
+    return "Rookie, the coast is clear. Take the Coastal Rush contract to prove yourself.";
+  if (!won.has("city"))
+    return "The syndicate knows your name. A prototype just arrived downtown.";
+  return "Vale is waiting in the canyon. Bring your fastest car.";
 }
 export const startDistance = (event, lengths) =>
   event.start ?? event.startRatio * lengths[event.road];
@@ -161,7 +163,7 @@ export function tickMission(m, dt, p, waypoint, pursuit, boardHit = null) {
   if (e.id === "glass") {
     if (e.boards.includes(boardHit) && !m.broken.includes(boardHit)) {
       m.broken.push(boardHit);
-      m.passed=m.broken.length;
+      m.passed = m.broken.length;
     }
   } else if (hit && e.id === "speed") {
     m.recorded = Math.round(Math.abs(p.speed) * 3.6);

@@ -815,7 +815,10 @@ async function gps(e) {
   if (mapOverlay) closeMap();
   if (!session) await launch();
   if (session) {
-    if(session.mission){session.mission=null;radioMessage('Contract released. GPS destination updated.');}
+    if (session.mission) {
+      session.mission = null;
+      radioMessage("Contract released. GPS destination updated.");
+    }
     session.gps = p;
     session.pause(false);
     notice("GPS set · " + (e ? e.name : "Custom waypoint"));
@@ -994,8 +997,17 @@ async function launch(event = null) {
       input,
       audio,
       {
-        notice, radio:radioMessage, result, hud:updateHud,
-        shockwave(){const pulse=document.createElement('div');pulse.className='shockwave';root.append(pulse);setTimeout(()=>pulse.remove(),850);notice('Nitro shockwave');}
+        notice,
+        radio: radioMessage,
+        result,
+        hud: updateHud,
+        shockwave() {
+          const pulse = document.createElement("div");
+          pulse.className = "shockwave";
+          root.append(pulse);
+          setTimeout(() => pulse.remove(), 850);
+          notice("Nitro shockwave");
+        },
       },
     );
     document.querySelector("#loading").remove();

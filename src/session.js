@@ -76,7 +76,9 @@ export class Session {
   waypoint() {
     const m = this.mission;
     if (m?.event.boards && m.passed < m.event.count) {
-      const board = this.world.boardAt(m.event.boards.find(id=>!m.broken.includes(id)));
+      const board = this.world.boardAt(
+        m.event.boards.find((id) => !m.broken.includes(id)),
+      );
       return { x: board.x, z: board.z, heading: 0 };
     }
     if (m && m.event.id !== "stunt" && ["intro", "running"].includes(m.status))
@@ -158,7 +160,7 @@ export class Session {
     const inp = this.input.read();
     if (this.paused) return;
     let boardHit = null;
-    const previousStage=this.p.boostStage;
+    const previousStage = this.p.boostStage;
     const p = this.p,
       m = this.mission;
     this.clock += dt;
@@ -193,7 +195,7 @@ export class Session {
         this.acc -= STEP;
       }
     }
-    if(previousStage<3 && p.boostStage===3) this.hooks.shockwave();
+    if (previousStage < 3 && p.boostStage === 3) this.hooks.shockwave();
     let wp = this.waypoint();
     const traffic = this.graphics.advance(dt, p, m, this.startAt, wp, (i) =>
       this.collect(i),

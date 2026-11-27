@@ -1423,6 +1423,29 @@ dialog .primary {
   }
 }
 
-.shockwave{position:absolute;inset:-24%;pointer-events:none;border:18px solid #adc7ff99;border-radius:50%;box-shadow:0 0 40px #a576ff99,inset 0 0 24px #b5e8ff99;animation:boost-ring .72s ease-out forwards}
-@keyframes boost-ring{from{transform:scale(.06);opacity:.9}to{transform:scale(1.42);opacity:0}}
-@media(prefers-reduced-motion:reduce){.shockwave{display:none}}
+.shockwave {
+  position: absolute;
+  inset: -24%;
+  pointer-events: none;
+  border: 18px solid #adc7ff99;
+  border-radius: 50%;
+  box-shadow:
+    0 0 40px #a576ff99,
+    inset 0 0 24px #b5e8ff99;
+  animation: boost-ring 0.72s ease-out forwards;
+}
+@keyframes boost-ring {
+  from {
+    transform: scale(0.06);
+    opacity: 0.9;
+  }
+  to {
+    transform: scale(1.42);
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .shockwave {
+    display: none;
+  }
+}

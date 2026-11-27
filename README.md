@@ -1,26 +1,108 @@
 # Velocity Syndicate
 
-Velocity Syndicate is a browser-based 3D action-driving game set in Aurelia Bay. A rookie driver takes on a corporate racing syndicate across the coast, downtown and the canyon. The project uses original fictional vehicles.
+A single-player 3D action-driving game set in **Aurelia Bay**. Start in the silver Veloce GT-R, explore the coastal highway, and take dispatch contracts against a corporate racing syndicate. The first playable release includes a three-contract campaign, three side trials and a persistent garage.
 
-## Foundation milestone
+## Run the game
 
-The first playable milestone targets a detailed player coupe, fixed-step simcade driving, drift and boost, four camera positions, road traffic, an event loop and an interactive garage. The long-term art target is a photorealistic, seamless coastal metropolis. This repository starts with its modular architecture.
+Install Node.js 22.12 or later and npm, then run these commands from the project root.
 
-## Run locally
+```sh
+npm ci
+npm run dev
+```
 
-The browser client is designed to run from any static HTTP server. Once the client is implemented, serve the checkout with `python3 -m http.server 8080` and open `http://localhost:8080`. Use a modern browser with graphics acceleration enabled. Node.js is used for checks and packaging.
+Open the local address printed by Vite. Select **Start driving** to enter free roam, or choose **Coastal Rush** to start the story. A current desktop browser with WebGL2 and hardware acceleration gives access to the full renderer. A built-in Canvas2D renderer projects the world and rasterizes the vehicle on machines without WebGL2. No API keys, asset downloads at runtime or backend services are required.
 
-## Project layout
+```sh
+npm test
+npm run build
+python3 -m http.server 8080 --directory dist
+```
 
-| Path | Responsibility |
+Open `http://localhost:8080` to play the production build. Any static host that preserves the contents of `dist/` can serve it. The source repository ZIP contains an ordinary working checkout and its commit history. Extract the ZIP before running commands.
+
+## Driving and controls
+
+| Action | Keyboard | Standard gamepad |
+| --- | --- | --- |
+| Accelerate | W or Up | RT |
+| Brake, then reverse | S or Down | LT |
+| Steer | A / D or Left / Right | Left stick |
+| Handbrake drift, airborne roll | Space and steering | B and left stick |
+| Three-stage nitro | Hold Shift | Hold A |
+| Cycle chase, hood, bumper and cinematic cameras | C | Y |
+| Recover to the road or current race checkpoint | R | X |
+| Accept a nearby event | E | LB |
+| Open the map | M | View |
+| Toggle headlights | H | D-pad Up |
+| Pause | Escape | Menu |
+
+Touch devices have steering, brake, throttle, drift and nitro buttons. A standard-mapping controller can navigate menus with the D-pad or stick, select with A, and go back with B. Use the bumpers on a focused tuning selector. Gamepad availability depends on the browser, a secure context or localhost, and an initial controller button press.
+
+The simulation uses metres, seconds and radians at 120 fixed steps per second. A separate velocity heading gives the tires a gradual breakaway during drifts. Speed-dependent steering reduces twitch at high speed. Ramps add vertical velocity, and completed rolls and sustained drifts help replenish boost. The hypercar exceeds 200 mph in the automated driving check.
+
+## Aurelia Bay
+
+The procedural island contains **13 roads totalling 15.6 km**, including a coastal circuit, a container harbour, downtown streets, a grade-separated expressway and elevated canyon switchbacks. Eighteen traffic cars follow the road network. Four stunt ramps launch cars, while roadside lamps, barriers and glass boards can be smashed. Seven hidden parts reward exploration.
+
+Use the world map to inspect an event, launch directly, or set GPS to its start. Click the map to place a custom destination on a road. In free roam, approaching an event beacon enables its dispatch prompt.
+
+| Event | Objective |
 | --- | --- |
-| src/ | Simulation, input, rendering, world, events and cameras |
-| assets/ | Original environmental art, interface assets and materials |
-| models/ | Procedural vehicle meshes and configuration |
-| scripts/ | Reproducible checks and static builds |
-| ui/ | Driving HUD, event map and garage |
-| audio/ | Procedural engine, boost and interface audio |
+| Coastal Rush | Clear six coastal gates against the clock. |
+| Neon Pursuit | Deliver a prototype along the expressway while keeping the pursuing interceptor outside capture range. |
+| Canyon Duel | Beat Vale to the seventh mountain gate. |
+| Dockside Air | Score 160 points with drifts, airtime and rolls. |
+| Terminal Velocity | Cross the speed trap at 220 km/h or faster. |
+| Glass Run | Smash the two marked harbour billboards before time expires. |
 
-## Design
+The first three contracts form the campaign and can be attempted in any order. Clearing all three unlocks the Solare X1. Events can be replayed for credits, reputation and personal bests. In-engine camera moves introduce contracts, with text dispatch and optional browser-synthesized speech. Bay FM plays an original 118 BPM synthwave loop. Enable it from the driver hub footer.
 
-Physics runs at a fixed timestep independently of display refresh. The HUD consumes simulation state, and camera selection does not change vehicle handling. Browser-local progress makes an offline single-player experience possible after downloading the source.
+## Vehicles and garage
+
+Seven original, unlicensed vehicle configurations share a parametric mesh generator. Each has a distinct wheelbase, body and cabin profile, handling tune and fascia. The launch coupe has over 103,000 triangles, sculpted wheel arches, an interior dashboard, calipers, steerable front wheels, rotating alloys, red brake lights, headlights, and a carbon wing.
+
+| Vehicle | Class |
+| --- | --- |
+| Veloce GT-R | Flat-six-inspired track coupe |
+| Nord V60-R | Performance wagon |
+| Vier RS4 | All-wheel-drive-inspired sport coupe |
+| Bergwerk M4X | Track saloon |
+| Maddox V8 | American muscle |
+| Kaido R32 | Japanese-inspired tuner |
+| Solare X1 | Mid-engine hypercar |
+
+Buy vehicles with race winnings. Each car has three upgrade levels for engine, turbocharger, transmission, nitro capacity, tires and suspension. Advanced levels also consume reputation points. Lifetime reputation determines driver rank. The garage shows the resulting top speed, acceleration, grip and boost capacity. Cosmetic tuning is included with ownership. Choose paint colour and finish, rims, tint, wing, sport bumpers, fender flares and underglow. Drag the showroom model to inspect it.
+
+Credits, reputation, owned cars, upgrades, appearance, collected parts, settings, victories and best times save to browser local storage under `velocity-syndicate.profile.v1`. A separate browser or origin has a separate save. The live position and unfinished event reset when you close the game.
+
+## Rendering
+
+Three.js runs the hardware-accelerated renderer, with instanced scenery, a procedural sky and ocean, fog, material reflections, wet-road shading, exhaust particles and a day/night cycle. The **High** preset adds selective screen-space road reflections, a depth-based sunlight scattering pass and speed-dependent radial blur. The software renderer uses lower-detail scenery and cached views of the configured vehicle. The photographic hub and district images are menu artwork. The driving environment is procedural.
+
+## Source layout
+
+| Path | Contents |
+| --- | --- |
+| `src/physics.js`, `src/input.js`, `src/camera.js` | Fixed-step vehicle dynamics, keyboard/gamepad input and the four driving cameras |
+| `src/world.js` | Road splines, spatial queries, terrain, structures, ramps and breakable props |
+| `src/graphics.js`, `src/postfx.js`, `src/software-view.js` | GPU presentation, traffic, effects and the software driving view |
+| `src/session.js`, `src/events.js`, `src/profile.js` | Game loop, contracts, economy and saved progress |
+| `src/main.js`, `ui/` | Driver hub, garage, map, settings, controls and HUD |
+| `models/` | Parametric vehicle meshes and orbitable garage studio |
+| `assets/`, `audio/` | Original menu and location artwork, Bay FM loop and engine synthesis |
+| `scripts/` | Build, portable repository packaging and automated regression checks |
+
+## Verification
+
+`npm test` exercises acceleration, reverse, controlled slip, staged nitro and re-arming, launch and landing physics, all seven meshes, a real harbour ramp, both expressway decks, resettable glass targets, speed-trap scoring, pursuit and rival outcomes, and speeds above 200 mph. Browser checks cover the driver hub, driving input, garage paint selection, camera changes and event entry.
+
+## Source transfer
+
+The downloadable ZIP preserves the `main` branch and commit objects. Run `git log --oneline` in the extracted directory to inspect them. To create a public GitHub remote from a checkout on an authenticated machine:
+
+```sh
+gh repo create velocity-syndicate-3d --public --source=. --remote=origin --push
+```
+
+Use `--private` for a private repository. The hosting project uses its own Git source repository. GitHub credentials are never included in the downloadable checkout.
