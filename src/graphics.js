@@ -278,6 +278,9 @@ export class RaceGraphics {
       { mesh: this.rival },
       { mesh: this.interceptor },
     ];
+    this.softwareScale = 1;
+    this.sampleTime = 0;
+    this.sampleFrames = 0;
     this.size = new ResizeObserver(() => this.resize());
     this.size.observe(container);
     this.resize();
@@ -312,12 +315,18 @@ export class RaceGraphics {
         this.effects = null;
       }
     } else {
-      const q = Math.min(
-        1,
-        (this.profile.settings.quality === "High" ? 1200 : 920) / w,
-      );
-      this.canvas.width = Math.round(w * q);
-      this.canvas.height = Math.round(h * q);
+      const budget =
+        { High: 1200, Balanced: 920, Low: 640 }[
+          this.profile.settings.quality
+        ] ?? 920;
+      const q =
+        Math.min(1, budget / w, (budget * 0.78) / h) * this.softwareScale;
+      const width = Math.max(1, Math.round(w * q));
+      const height = Math.max(1, Math.round(h * q));
+      if (width !== this.canvas.width || height !== this.canvas.height) {
+        this.canvas.width = width;
+        this.canvas.height = height;
+      }
     }
   }
   resetEncounter(p) {
@@ -439,6 +448,24 @@ export class RaceGraphics {
     const t = this.time;
     this.world.update(t, night, p);
     if (!this.renderer) {
+      // Only the software scene changes resolution. The HTML HUD and map retain
+      // their full pixel density; sustained headroom brings scene detail back.
+      this.sampleTime += dt;
+      this.sampleFrames++;
+      if (this.sampleTime >= 1.2) {
+        const frame = this.sampleTime / this.sampleFrames;
+        const next =
+          frame > 0.052
+            ? Math.max(0.62, this.softwareScale - 0.13)
+            : frame < 0.025
+              ? Math.min(1, this.softwareScale + 0.05)
+              : this.softwareScale;
+        this.sampleTime = this.sampleFrames = 0;
+        if (next !== this.softwareScale) {
+          this.softwareScale = next;
+          this.resize();
+        }
+      }
       this.software.render(
         p,
         this.controller.index,
