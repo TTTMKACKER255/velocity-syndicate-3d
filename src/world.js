@@ -72,7 +72,8 @@ export function routePoint(index, distance) {
   while (lo + 1 < hi) { const mid = (lo + hi) >> 1; if (sta[mid] <= d) lo = mid; else hi = mid; }
   const [x,z] = pts[lo], dx = pts[lo+1][0]-x, dz = pts[lo+1][1]-z;
   const t = clamp((d-sta[lo])/(sta[lo+1]-sta[lo] || 1),0,1);
-  return {x:x+dx*t,z:z+dz*t,heading:Math.atan2(-dx,-dz)+(back ? Math.PI : 0)};
+  const px=x+dx*t,pz=z+dz*t;
+  return {x:px,z:pz,height:groundHeight(px,pz)+(index===expressway?deckHeight(d):0)+.25,heading:Math.atan2(-dx,-dz)+(back ? Math.PI : 0)};
 }
 export const spawn = routePoint(0, 5);
 
@@ -270,9 +271,9 @@ function makeRoads(root){
       float grit=fract(sin(dot(floor(roadWorld.xz*14.),vec2(12.9898,78.233)))*43758.5453);
       diffuseColor.rgb*=1.+(grit-.5)*.13*(1.-smoothstep(13.,78.,rd));
       float glint=pow(1.-max(normalize(cameraPosition-roadWorld).y,0.),9.);
-      float patch=smoothstep(.15,.85,sin(roadWorld.x*.08+sin(roadWorld.z*.07))*.4+.5);
-      diffuseColor.rgb+=vec3(.028,.039,.044)*patch*glint;`);
-    shader.fragmentShader=shader.fragmentShader.replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor=mix(roughnessFactor,.13,patch*.85);');
+      float wetPatch=smoothstep(.15,.85,sin(roadWorld.x*.08+sin(roadWorld.z*.07))*.4+.5);
+      diffuseColor.rgb+=vec3(.028,.039,.044)*wetPatch*glint;`);
+    shader.fragmentShader=shader.fragmentShader.replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor=mix(roughnessFactor,.13,wetPatch*.85);');
   };
   const roadMesh=new THREE.Mesh(asphalt.finish(),roadMat);roadMesh.name='Wet asphalt';roadMesh.receiveShadow=true;root.add(roadMesh);
   root.add(new THREE.Mesh(stone.finish(),geometricMaterial()));
@@ -655,7 +656,7 @@ function createScenery(root,night) {
 
   // Glass festival boards can be driven through. Hide all parts in the same collision step.
   const glassBoardMat=new THREE.MeshStandardMaterial({transparent:true,opacity:.72,roughness:.24,metalness:.16});
-  const boards=batches.create(box.clone(),glassBoardMat);
+  const boards=batches.create(box.clone(),glassBoardMat),trialBoards=new Map();
   for(const [i,station] of [[0,404],[0,1078],[1,328],[1,1880],[2,231],[2,548],[5,142]]) {
     const p=routePoint(i,station),off=roads[i].width*.5+2.6,x=p.x+Math.cos(p.heading)*off,z=p.z-Math.sin(p.heading)*off,y=groundHeight(x,z);
     const parts=[[boards,boards.add(transform(x,y+1.45,z,3.6,2.4,.12,p.heading),'#66bcbf')]];
@@ -663,12 +664,13 @@ function createScenery(root,night) {
       const px=x+Math.cos(p.heading)*1.67*s,pz=z-Math.sin(p.heading)*1.67*s;
       parts.push([blocks,blocks.add(transform(px,y+.8,pz,.12,1.6,.14,p.heading),'#717774')]);
     }
-    const prop={alive:true,parts,x,z};solid(x,z,1.65,1.65,y,2.8,prop);
+    const prop={alive:true,parts,x,z,boardId:i+'/'+station};
+    prop.original=parts.map(([batch,id])=>batch.items[id].matrix.clone());trialBoards.set(prop.boardId,prop);solid(x,z,1.65,1.65,y,2.8,prop);
   }
   batches.finish();
   const hidden=transform(0,-200,0,.001,.001,.001);
   function collide(p){
-    let smashed=0;
+    let smashed=0,boardId=null;
     const py=p.y??groundHeight(p.x,p.z);
     let solidHit=shoreDepth(p.x,p.z)<-3 && py<2;
     for(const item of collisions.get(key(p.x,p.z))||empty) {
@@ -676,14 +678,14 @@ function createScenery(root,night) {
       if(Math.abs(p.x-item.x)>item.rx+.78 || Math.abs(p.z-item.z)>item.rz+.78)continue;
       if(item.smash){
         if(!item.smash.alive)continue;
-        item.smash.alive=false;
+        item.smash.alive=false;boardId=item.smash.boardId||boardId;
         for(const [batch,id] of item.smash.parts){
           batch.mesh.setMatrixAt(id,hidden);batch.mesh.instanceMatrix.needsUpdate=true;
         }
         smashed++;
       }else solidHit=true;
     }
-    return {solid:solidHit,smashed};
+    return {solid:solidHit,smashed,boardId};
   }
   function surface(x,z,vehicleY){
     const terrain=groundHeight(x,z), onRoad=roadAt(x,z,0,-1,true), base=terrain+(onRoad ? .25 : .015);
@@ -705,7 +707,10 @@ function createScenery(root,night) {
     }
     return {height:base,road:onRoad,ramp:false};
   }
-  return {collide,surface,update(n){lampHeadMaterial.emissiveIntensity=.3+n*2.7;}};
+  function resetBoards(ids){
+    for(const id of ids){const b=trialBoards.get(id);if(!b)continue;b.alive=true;b.parts.forEach(([batch,i],n)=>{batch.mesh.setMatrixAt(i,b.original[n]);batch.mesh.instanceMatrix.needsUpdate=true;});}
+  }
+  return {collide,surface,resetBoards,boardAt:id=>trialBoards.get(id),update(n){lampHeadMaterial.emissiveIntensity=.3+n*2.7;}};
 }
 
 export function createWorld(scene) {
@@ -714,7 +719,7 @@ export function createWorld(scene) {
   makeTerrain(root);makeRoads(root);
   const ocean=makeOcean(root),scenery=createScenery(root,night);
   return {
-    group:root,collide:scenery.collide,surface:scenery.surface,
+    group:root,collide:scenery.collide,surface:scenery.surface,resetBoards:scenery.resetBoards,boardAt:scenery.boardAt,
     update(time,nightBlend=0) {
       night.value=clamp(Number(nightBlend)||0,0,1);
       ocean(time,night.value);scenery.update(night.value);

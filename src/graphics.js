@@ -27,7 +27,7 @@ function trafficCar(color){
  for(const x of [-.68,.68]){box(.37,.12,.05,x,.68,2.09,red);box(.4,.13,.05,x,.68,-2.09,white);}
  return g;
 }
-function place(obj,point,offset=0){obj.position.set(point.x+Math.cos(point.heading)*offset,groundHeight(point.x,point.z)+.08,point.z-Math.sin(point.heading)*offset);obj.rotation.y=point.heading;}
+function place(obj,point,offset=0){obj.position.set(point.x+Math.cos(point.heading)*offset,(point.height??groundHeight(point.x,point.z))+.08,point.z-Math.sin(point.heading)*offset);obj.rotation.y=point.heading;}
 function gate(){
  const g=new THREE.Group(),m=new THREE.MeshBasicMaterial({color:0xff873d,transparent:true,opacity:.7,depthWrite:false});
  for(const x of [-8,8]){const pole=new THREE.Mesh(new THREE.BoxGeometry(.18,7,.22),m);pole.position.set(x,3.5,0);g.add(pole);}
@@ -75,13 +75,16 @@ export class RaceGraphics {
   this.size=new ResizeObserver(()=>this.resize());this.size.observe(container);this.resize();
  }
  resize(){const w=this.container.clientWidth,h=this.container.clientHeight;if(!w||!h)return;this.camera.aspect=w/h;this.camera.updateProjectionMatrix();if(this.renderer){this.renderer.setPixelRatio(Math.min(devicePixelRatio,this.profile.settings.quality==='High'?1.75:this.profile.settings.quality==='Low'?.85:1.2));this.renderer.setSize(w,h,false);if(this.profile.settings.quality==='High'){this.effects??=new DriveEffects(this.renderer,this.scene,this.camera);this.effects.resize(w,h);}else if(this.effects){this.effects.dispose();this.effects=null;}}else{const q=Math.min(1,(this.profile.settings.quality==='High'?1200:920)/w);this.canvas.width=Math.round(w*q);this.canvas.height=Math.round(h*q);}}
- resetEncounter(p){this.interceptor.position.set(p.x+Math.sin(p.heading)*50,p.y,p.z+Math.cos(p.heading)*50);this.controller.snap=true;}
+ resetEncounter(p){this.trail=[{x:p.x,y:p.y,z:p.z}];this.interceptor.position.set(p.x+Math.sin(p.heading)*35,p.y,p.z+Math.cos(p.heading)*35);this.controller.snap=true;}
  advance(dt,p,mission,start,waypoint,onCollect){
   this.time+=dt;const t=this.time;
   let hit=false;for(const a of this.traffic){a.dist+=dt*a.speed;const pos=routePoint(a.road,a.dist);place(a.mesh,pos,3.1);if(Math.hypot(a.mesh.position.x-p.x,a.mesh.position.z-p.z)<2.45 && Math.abs(a.mesh.position.y-p.y)<2)hit=true;}
   this.rival.visible=mission?.event.id==='canyon';if(this.rival.visible)place(this.rival,routePoint(1,start+mission.rival),-2.5);
   this.interceptor.visible=mission?.event.id==='city';let pursuit=Infinity;
-  if(this.interceptor.visible){const v=this.interceptor.position,dx=p.x-v.x,dz=p.z-v.z; pursuit=Math.hypot(dx,dz);if(mission.status==='running'&&pursuit>2){const amount=Math.min(pursuit-2,(18+Math.min(17,mission.elapsed*.3))*dt);v.x+=dx/pursuit*amount;v.z+=dz/pursuit*amount;}v.y=groundHeight(v.x,v.z)+.1;this.interceptor.rotation.y=Math.atan2(-dx,-dz);this.lightbar.material.color.setHex(Math.floor(t*5)%2?0xfb3c34:0x388bff);}
+  if(this.interceptor.visible){const v=this.interceptor.position,dx=p.x-v.x,dz=p.z-v.z; pursuit=Math.hypot(dx,dz);if(mission.status==='running'&&pursuit>2){const tail=this.trail.at(-1);if(Math.hypot(p.x-tail.x,p.z-tail.z)>3)this.trail.push({x:p.x,y:p.y,z:p.z});
+   const target=this.trail[0],tx=target.x-v.x,tz=target.z-v.z,gap=Math.hypot(tx,tz),amount=Math.min(gap,(18+Math.min(17,mission.elapsed*.3))*dt);
+   if(gap>.001){v.x+=tx/gap*amount;v.z+=tz/gap*amount;v.y+=(target.y-v.y)*Math.min(1,amount/gap);}
+   if(gap<2&&this.trail.length>1)this.trail.shift();}this.interceptor.rotation.y=Math.atan2(-dx,-dz);this.lightbar.material.color.setHex(Math.floor(t*5)%2?0xfb3c34:0x388bff);}
   this.gate.visible=Boolean(waypoint);if(waypoint){place(this.gate,waypoint);this.gate.children[3].rotation.y=t;}
   this.beacons.forEach(b=>{b.visible=!mission;b.rotation.y=t*.65;});
   for(const part of this.parts){const m=part.mesh;if(!m.visible)continue;m.rotation.set(t*.4,t,.3);if(Math.hypot(p.x-m.position.x,p.z-m.position.z)<3.8){m.visible=false;onCollect(part.id);}}

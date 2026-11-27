@@ -401,7 +401,7 @@ export function createSoftwareView(canvas,look={},worldGroup) {
     }
   }
   function gate(waypoint){
-    const {x,z,heading=0}=waypoint,y=groundHeight(x,z),co=Math.cos(heading),si=Math.sin(heading);
+    const {x,z,heading=0}=waypoint,y=waypoint.height??groundHeight(x,z),co=Math.cos(heading),si=Math.sin(heading);
     if(!visible(x,z,16,750))return;
     const d=depth(x,y,z),px=clamp(f/Math.max(d,1)*.17,1.1,8);
     const left=[x-co*8,y,z+si*8],right=[x+co*8,y,z-si*8];

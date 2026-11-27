@@ -288,7 +288,9 @@ export function createShowroom(container,look={}) {
   let canvas=document.createElement('canvas');
   let renderer,studio,software;
   try {
-    renderer=new THREE.WebGLRenderer({canvas,antialias:true,powerPreference:'high-performance'});
+    const options={antialias:true,powerPreference:'high-performance'},context=canvas.getContext('webgl2',options);
+    if(!context)throw new Error('WebGL2 unavailable');
+    renderer=new THREE.WebGLRenderer({canvas,context,...options});
     renderer.outputColorSpace=THREE.SRGBColorSpace;
     renderer.toneMapping=THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure=1.03;

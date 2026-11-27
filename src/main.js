@@ -1,6 +1,6 @@
 import '../ui/style.css';
 import { icon,logo } from '../ui/icons.js';
-import { cars,activeCar,baseLook,currentLook,readProfile,saveProfile,money,upgradeCost,upgradeNames } from './profile.js';
+import { cars,activeCar,currentLook,readProfile,saveProfile,money,upgradeCost,repCost,upgradeNames } from './profile.js';
 import { vehicleStats } from './physics.js';
 import { events,activities,storyLine,startDistance } from './events.js';
 import { Controls } from './input.js';
@@ -18,7 +18,6 @@ let launchBusy=false,radioActive=false,dialogKind='',dialogData=null,toastTimer,
 const cash=()=>money(profile.credits)+' CR',car=()=>activeCar(profile);
 const btn=(id,text,css='secondary')=>'<button class="'+css+'" data-act="'+id+'">'+text+'</button>';
 const iconBtn=(act,label,glyph)=>'<button class="icon-button" data-act="'+act+'" aria-label="'+label+'" title="'+label+'">'+icon(glyph,17)+'</button>';
-const key=(s)=>'<kbd>'+s+'</kbd>';
 function notice(message){toastEl.textContent=message;toastEl.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>toastEl.classList.remove('show'),2350);}
 function persist(){if(!saveProfile(profile))notice('Progress is available for this session only');updateAccount();}
 function updateAccount(){const credit=app.querySelector('[data-credits]');if(credit)credit.textContent=cash();const rank=app.querySelector('[data-rank]');if(rank)rank.textContent=profile.rep>=350?'HEADLINER':profile.rep>=100?'CONTENDER':'ROOKIE';}
@@ -70,10 +69,10 @@ const swatches=['#bfc4c9','#2d3032','#cc4a30','#efa74c','#47687b','#5c7f64'];
 function garagePanel(){
  const c=getGarageCar(),owned=profile.owned.includes(c.id),t=vehicleStats(c,profile.upgrades[c.id]),look=currentLook(profile,c);
  const stat=(label,v,bar)=>'<div><div class="stat-label"><span>'+label+'</span><span>'+v+'</span></div><div class="stat-track"><i style="width:'+Math.min(100,bar)+'%"></i></div></div>';
- const stats='<div class="stats-grid">'+stat('Top speed',Math.round(t.top*3.6)+' km/h',t.top/1.2)+stat('Acceleration',t.accel.toFixed(1)+' m/s²',t.accel*4.1)+stat('Handling',t.grip.toFixed(2)+' ×',t.grip*60)+stat('Nitro',t.capacity.toFixed(1)+' s',t.capacity*13)+'</div>';
+ const stats='<div class="subpage-note">'+money(profile.repBalance)+' RP available</div><div class="stats-grid">'+stat('Top speed',Math.round(t.top*3.6)+' km/h',t.top/1.2)+stat('Acceleration',t.accel.toFixed(1)+' m/s²',t.accel*4.1)+stat('Handling',t.grip.toFixed(2)+' ×',t.grip*60)+stat('Nitro',t.capacity.toFixed(1)+' s',t.capacity*13)+'</div>';
  let tuning='';
  if(owned&&garageTab==='performance'){
-  tuning=Object.entries(upgradeNames).map(([id,label])=>{const lv=profile.upgrades[c.id]?.[id]||0,cost=upgradeCost(lv);return '<div class="garage-row"><div><label>'+label+'</label><small>Level '+lv+' / 3</small></div><button class="buy" data-act="upgrade:'+id+'" '+(lv===3||profile.credits<cost?'disabled':'')+'>'+ (lv===3?'Max level':'+ '+money(cost)+' CR')+'</button></div>';}).join('');
+  tuning=Object.entries(upgradeNames).map(([id,label])=>{const lv=profile.upgrades[c.id]?.[id]||0,cost=upgradeCost(lv);return '<div class="garage-row"><div><label>'+label+'</label><small>Level '+lv+' / 3</small></div><button class="buy" data-act="upgrade:'+id+'" '+(lv===3||(profile.credits<cost||profile.repBalance<repCost(lv))?'disabled':'')+'>'+ (lv===3?'Max level':'+ '+money(cost)+' CR'+(repCost(lv)?' · '+repCost(lv)+' RP':''))+'</button></div>';}).join('');
  }else if(owned){
   const choices=(id,label,values)=>'<div class="garage-row"><label for="v-'+id+'">'+label+'</label><select id="v-'+id+'" data-look="'+id+'">'+values.map(([v,l])=>'<option value="'+v+'" '+(String(look[id])===String(v)?'selected':'')+'>'+l+'</option>').join('')+'</select></div>';
   const toggle=[[false,'Stock'],[true,'Fitted']];tuning='<div class="garage-row"><label>Paint colour</label><div class="swatches">'+swatches.map((v,i)=>'<button style="--swatch:'+v+'" class="swatch '+(v===look.paint?'on':'')+'" aria-label="Paint '+['silver','graphite','vermilion','amber','slate','alpine green'][i]+'" data-act="paint:'+v+'"></button>').join('')+'</div></div>'+choices('finish','Paint finish',[['metallic','Metallic'],['matte','Matte'],['iridescent','Iridescent']])+choices('rims','Alloy rims',[['alloy','Graphite'],['silver','Silver'],['mesh','Mesh'],['bronze','Bronze']])+choices('spoiler','Carbon wing',[[true,'Fitted'],[false,'Removed']])+choices('bumper','Sport bumpers',toggle)+choices('widebody','Widebody kit',toggle)+choices('tint','Window tint',[[false,'Factory'],[true,'Smoke']])+choices('underglow','Underglow',[[false,'Off'],[true,'Amber']]);
@@ -88,7 +87,7 @@ async function garage(){
  refreshGarage(false);try{const {createShowroom}=await import('../models/showroom.js');if(screen==='garage'&&rev===revision)showroom=createShowroom(document.querySelector('#showroom'),currentLook(profile,getGarageCar()));}catch(e){notice('The 3D preview could not start. Garage tuning is still available.');console.error(e);}
 }
 function setLook(k,v){const c=getGarageCar();if(!profile.owned.includes(c.id))return;profile.looks[c.id]={...currentLook(profile,c),[k]:v==='true'?true:v==='false'?false:v};persist();refreshGarage();}
-function upgrade(id){const c=getGarageCar();if(!upgradeNames[id]||!profile.owned.includes(c.id))return;const tune=profile.upgrades[c.id]??={},level=tune[id]||0,price=upgradeCost(level);if(level>=3||price>profile.credits)return;profile.credits-=price;tune[id]=level+1;persist();refreshGarage(false);notice(upgradeNames[id]+' upgraded to level '+(level+1));}
+function upgrade(id){const c=getGarageCar();if(!upgradeNames[id]||!profile.owned.includes(c.id))return;const tune=profile.upgrades[c.id]??={},level=tune[id]||0,price=upgradeCost(level);if(level>=3||price>profile.credits||repCost(level)>profile.repBalance)return;profile.credits-=price;profile.repBalance-=repCost(level);tune[id]=level+1;persist();refreshGarage(false);notice(upgradeNames[id]+' upgraded to level '+(level+1));}
 function equip(){const c=getGarageCar();if(!profile.owned.includes(c.id)){if(profile.credits<c.cost)return;profile.credits-=c.cost;profile.owned.push(c.id);}profile.car=c.id;persist();refreshGarage(false);const label=document.querySelector('.subpage-note');if(label)label.textContent=profile.owned.length+' / '+cars.length+' vehicles owned';notice(c.name+' equipped');}
 document.addEventListener('change',e=>{if(e.target.dataset.look)setLook(e.target.dataset.look,e.target.value);});
 let mapApi=null,mapCanvas=null,mapState=null;
@@ -108,7 +107,7 @@ function updateMapSelection(){
 }
 async function worldMap(){
  if(launchBusy)return;
- if(session){if(mapOverlay){closeMap();return;}session.pause(true);mapOverlay=document.createElement('aside');mapOverlay.className='map-in-game';mapOverlay.innerHTML='<div class="page">'+mapBody()+'</div>';app.append(mapOverlay);}
+ if(session){if(mapOverlay){closeMap();return;}session.pause(true);mapOverlay=document.createElement('aside');mapOverlay.className='map-in-game';app.querySelector('.drive').inert=true;mapOverlay.innerHTML='<div class="page">'+mapBody()+'</div>';app.append(mapOverlay);}
  else{clearView();screen='map';shell(mapBody());}
  const epoch=++mapEpoch;
  const [m,w]=await Promise.all([import('../ui/map.js'),import('./world.js')]);if(epoch!==mapEpoch)return;
@@ -117,7 +116,7 @@ async function worldMap(){
   if(found){mapPick=found;mapGps=null;}else{mapPick=null;const p=mapState.world(x,y);let best=Infinity;for(const road of w.roads){for(const [a,b]of road.points){const d=Math.hypot(a-p.x,b-p.z);if(d<best){best=d;mapGps={x:a,z:b};}}}}updateMapSelection();
  });
 }
-function closeMap(){mapResize?.disconnect();mapResize=null;mapEpoch++;mapOverlay?.remove();mapOverlay=null;mapCanvas=null;if(session)session.pause(false);}
+function closeMap(){const drive=app.querySelector('.drive');if(drive)drive.inert=false;mapResize?.disconnect();mapResize=null;mapEpoch++;mapOverlay?.remove();mapOverlay=null;mapCanvas=null;if(session)session.pause(false);}
 async function gps(e){
  let p=mapGps;if(e){const w=await import('./world.js');p=w.routePoint(e.road,startDistance(e,w.roadLengths));}if(!p)return;
  closeDialog(false);if(mapOverlay)closeMap();if(!session)await launch();if(session){session.gps=p;session.pause(false);notice('GPS set · '+(e?e.name:'Custom waypoint'));}
@@ -134,14 +133,14 @@ function updateHud(p,m,wp,near,district){
  h.gear.textContent=p.gear<0?'R':p.gear;h.rpm.style.width=Math.round(p.rpm/86)+'%';h['rpm-label'].textContent=money(p.rpm);
  h.nitro.style.width=Math.round(p.nitro*100)+'%';h['nitro-label'].textContent=p.boosting?['','Boost','Overdrive','Shockwave'][p.boostStage]:Math.round(p.nitro*100)+'%';
  h.district.textContent=district;h['race-name'].textContent=m?m.event.name:district;h['race-type'].textContent=m?m.event.type:'Free roam';
- h['race-progress'].textContent=m?((m.event.id==='stunt'?m.stunt+' / 160 stunt points':'Gate '+Math.min(m.event.count,m.passed+1)+' / '+m.event.count)+'  ·  '+Math.ceil(Math.max(0,m.event.limit-m.elapsed))+' s'+(m.event.id==='city'?'  ·  Heat '+Math.round(m.exposure*100)+'%':'')):p.drift?'Drift · '+Math.round(p.driftScore)+' pts':p.airborne?'Airborne · '+p.airtime.toFixed(1)+' s':'';
+ h['race-progress'].textContent=m?((m.event.id==='stunt'?m.stunt+' / 160 stunt points':(m.event.id==='glass'?'Billboard ':'Gate ')+Math.min(m.event.count,m.passed+1)+' / '+m.event.count)+'  ·  '+Math.ceil(Math.max(0,m.event.limit-m.elapsed))+' s'+(m.event.id==='city'?'  ·  Heat '+Math.round(m.exposure*100)+'%':'')):p.drift?'Drift · '+Math.round(p.driftScore)+' pts':p.airborne?'Airborne · '+p.airtime.toFixed(1)+' s':'';
  h.countdown.textContent=m?.status==='intro'?Math.max(1,Math.ceil(m.intro)):'';
  h['near-event'].hidden=!near;if(near)h['near-event'].textContent='[ E ]  Enter '+near.name;
  if(wp){const distance=Math.hypot(p.x-wp.x,p.z-wp.z);const bearing=Math.atan2(-(wp.x-p.x),-(wp.z-p.z));const delta=Math.atan2(Math.sin(bearing-p.heading),Math.cos(bearing-p.heading));h['gps-readout'].textContent=(Math.abs(delta)>2.6?'Turn around':delta>.3?'Bear left':delta<-.3?'Bear right':'Ahead')+'  ·  '+Math.round(distance)+' m';}else h['gps-readout'].textContent='';
  miniDraw(h.mini,{player:p,waypoint:wp,local:true,scale:.35,events:activities,selected:m?.event});
 }
 function result(m,reward,rep){
- const won=m.status==='won';openDialog('result',won?'Event complete':'Event ended','<div class="eyebrow">'+m.event.name+'</div><p class="dialog-copy">'+(won?(m.event.id==='canyon'?'Vale hands over the keys to the Solare X1. The streets are yours.':'Dispatch confirmed your run. Your prize is in the garage account.'):(m.exposure>=1?'The interceptors caught the prototype.':m.event.id==='canyon'?'Vale claimed the finish.':'The clock ran out.'))+'</p>'+line('Run time',m.elapsed.toFixed(1)+' s')+(won?line('Award',money(reward)+' CR · '+rep+' REP'):'')+'<div class="modal-actions">'+btn('free-continue','Free roam','primary')+btn('launch:'+m.event.id,'Retry event')+btn('leave','Driver hub','minor-btn')+'</div>');
+ const won=m.status==='won';openDialog('result',won?'Event complete':'Event ended','<div class="eyebrow">'+m.event.name+'</div><p class="dialog-copy">'+(won?(m.unlocked?'All three contracts are complete. The syndicate is out, and the Solare X1 is yours.':m.event.id==='canyon'?'Vale has conceded the canyon. Clear all three district contracts to claim his Solare X1.':'Dispatch confirmed your run. Your prize is in the garage account.'):(m.event.id==='speed'&&m.recorded?'The camera recorded '+m.recorded+' km/h. The target was 220 km/h.':m.exposure>=1?'The interceptors caught the prototype.':m.event.id==='canyon'?'Vale claimed the finish.':'The clock ran out.'))+'</p>'+line('Run time',m.elapsed.toFixed(1)+' s')+(m.recorded?line('Speed trap',m.recorded+' km/h'):'')+(won?line('Award',money(reward)+' CR · '+rep+' REP'):'')+'<div class="modal-actions">'+btn('free-continue','Free roam','primary')+btn('launch:'+m.event.id,'Retry event')+btn('leave','Driver hub','minor-btn')+'</div>');
 }
 async function launch(event=null){
  if(launchBusy)return;
@@ -188,6 +187,7 @@ function navigatePad(t){
   const axis=Math.abs(pad.axes[1]||0)>.55?pad.axes[1]:pad.axes[0]||0;
   const direction=down(13)||down(15)||axis>.55?1:down(12)||down(14)||axis<-.55?-1:0;
   if(direction&&t>padLatch&&candidates.length){const idx=candidates.indexOf(document.activeElement);candidates[(Math.max(-1,idx)+direction+candidates.length)%candidates.length].focus();padLatch=t+190;}
+  if(document.activeElement?.tagName==='SELECT'&&(pressed(4)||pressed(5))){const select=document.activeElement;select.selectedIndex=(select.selectedIndex+(pressed(5)?1:-1)+select.options.length)%select.options.length;select.dispatchEvent(new Event('change',{bubbles:true}));}
   if(pressed(0)){(candidates.includes(document.activeElement)?document.activeElement:candidates.find(b=>b.dataset.act==='drive')||candidates[0])?.click();}
   if(pressed(1)||pressed(9)){if(dialog.open)closeDialog();else if(mapOverlay)closeMap();else if(screen!=='hub')hub();}
  }

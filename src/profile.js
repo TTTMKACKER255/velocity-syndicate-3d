@@ -8,10 +8,11 @@ export const cars = [
   {id:'hyper',name:'Solare X1',make:'Solare',kind:'Mid-engine hypercar',top:101,accel:18.2,grip:1.18,cost:16500,paint:'#c09329'}
 ];
 export const upgradeNames={engine:'Engine',turbo:'Turbocharger',transmission:'Transmission',nitro:'Nitro capacity',tires:'Tires',suspension:'Suspension'};
+export const repCost=level=>level*20;
 export const upgradeCost=level=>(level+1)*850;
 export const baseLook=car=>({body:car.id,paint:car.paint,finish:'metallic',rims:'alloy',spoiler:true,widebody:false,bumper:false,tint:false,underglow:false});
 const key='velocity-syndicate.profile.v1';
-const defaults=()=>({version:1,credits:2500,rep:0,car:'coupe',owned:['coupe'],upgrades:{},looks:{},wins:{},best:{},parts:[],settings:{sound:true,voice:false,quality:'Balanced',units:'km/h',cycle:true}});
+const defaults=()=>({version:1,credits:2500,rep:0,repBalance:0,car:'coupe',owned:['coupe'],upgrades:{},looks:{},wins:{},best:{},parts:[],settings:{sound:true,voice:false,quality:'Balanced',units:'km/h',cycle:true}});
 export function readProfile() {
   const fresh=defaults();
   try {
@@ -23,7 +24,8 @@ export function readProfile() {
     if(!p.owned.includes(p.car)) p.car='coupe';
     for(const k of ['best','wins','upgrades','looks']) if(!p[k]||typeof p[k]!=='object')p[k]={};
     if(!Array.isArray(p.parts))p.parts=[];
-    for(const k of ['rep','credits']) p[k]=Number.isFinite(p[k])?Math.max(0,p[k]):fresh[k];
+    if(!Number.isFinite(raw.repBalance))p.repBalance=p.rep;
+    for(const k of ['rep','repBalance','credits']) p[k]=Number.isFinite(p[k])?Math.max(0,p[k]):fresh[k];
     return p;
   } catch { return fresh; }
 }
