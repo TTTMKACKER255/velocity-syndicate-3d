@@ -32,7 +32,7 @@ Open `http://localhost:8080` to play the production build. Any static host that 
 | Three-stage nitro | Hold Shift | Hold A |
 | Cycle chase, hood, bumper and cinematic cameras | C | Y |
 | Recover to the road or current race checkpoint | R | X |
-| Accept a nearby event | E | LB |
+| Use a nearby location or enter an event | E | LB |
 | Open the map | M | View |
 | Toggle headlights | H | D-pad Up |
 | Pause | Escape | Menu |
@@ -43,9 +43,9 @@ The simulation uses metres, seconds and radians at 120 fixed steps per second. A
 
 ## Aurelia Bay
 
-The procedural island contains **13 roads totalling 15.6 km**, including a coastal circuit, a container harbour, downtown streets, a grade-separated expressway and elevated canyon switchbacks. Eighteen traffic cars follow the road network. Four stunt ramps launch cars, while roadside lamps, barriers and glass boards can be smashed. Seven hidden parts reward exploration.
+The procedural island contains **13 roads totalling 15.6 km**, including a coastal circuit, a container harbour, downtown streets, a grade-separated expressway and elevated canyon switchbacks. Eighteen traffic cars use both directions of the road network. Their oriented collision bodies exchange momentum with the player. Off-centre hits make the struck vehicle rotate and slide before it steers back to its lane. The same contact model applies to the rival and interceptor. Strong impacts leave localized dents on both cars for the drive. Four stunt ramps launch cars, while roadside lamps, barriers and glass boards can be smashed. A hard hit fells roadside trees in the direction of impact. Seven hidden parts reward exploration.
 
-Use the world map to inspect an event, launch directly, or set GPS to its start. Click the map to place a custom destination on a road. In free roam, approaching an event beacon enables its dispatch prompt.
+Use the world map to inspect an event, launch directly, or set GPS to its start. Click the map to place a custom destination on a road. The Places tab marks Bayline Garage, Promenade Home, the harbour stunt yard, Canyon Overlook and Festival Plaza. These destinations have matching minimap icons and coloured in-world beacons. Press E nearby to use a location. Parking at Home sets the next free-roam starting point.
 
 | Event | Objective |
 | --- | --- |
@@ -56,7 +56,7 @@ Use the world map to inspect an event, launch directly, or set GPS to its start.
 | Terminal Velocity | Cross the speed trap at 220 km/h or faster. |
 | Glass Run | Smash the two marked harbour billboards before time expires. |
 
-The first three contracts form the campaign and can be attempted in any order. Clearing all three unlocks the Solare X1. Events can be replayed for credits, reputation and personal bests. In-engine camera moves introduce contracts, with text dispatch and optional browser-synthesized speech. Bay FM plays an original 118 BPM synthwave loop. Enable it from the driver hub footer.
+The first three contracts form the campaign and can be attempted in any order. Clearing all three unlocks the Solare X1. Events can be replayed for credits, reputation and personal bests. In-engine camera moves introduce contracts, with text dispatch and optional browser-synthesized speech. Bay FM plays MintoDog’s CC0 recordings *Pure Raceway* and *Sky Blue Street* alongside the original *Afterhours Run*. Use Playlist in the hub or the radio button while driving to play, pause or skip. All three recordings are bundled locally. See [audio credits](audio/CREDITS.md).
 
 ## Vehicles and garage
 
@@ -78,7 +78,7 @@ Credits, reputation, owned cars, upgrades, appearance, collected parts, settings
 
 ## Rendering
 
-Three.js runs the hardware-accelerated renderer, with instanced scenery, a procedural sky and ocean, fog, material reflections, wet-road shading, exhaust particles and a day/night cycle. The **High** preset adds selective screen-space road reflections, a depth-based sunlight scattering pass and speed-dependent radial blur. The software renderer uses lower-detail scenery and cached views of the configured vehicle. The photographic hub and district images are menu artwork. The driving environment is procedural.
+Three.js runs the hardware-accelerated renderer, with instanced scenery, a procedural sky and ocean, fog, material reflections, wet-road shading, exhaust particles and a day/night cycle. Paired tire marks follow the rear wheels according to slip, road contact and elevation. Roads and downtown blocks use local asphalt, pavement, glass, masonry and storefront textures. The **High** preset adds selective screen-space road reflections, a depth-based sunlight scattering pass and speed-dependent radial blur. The software renderer uses lower-detail scenery and cached views of the configured vehicle. The photographic hub and district images are menu artwork. The driving environment is procedural.
 
 ## Source layout
 
@@ -86,23 +86,25 @@ Three.js runs the hardware-accelerated renderer, with instanced scenery, a proce
 | --- | --- |
 | `src/physics.js`, `src/input.js`, `src/camera.js` | Fixed-step vehicle dynamics, keyboard/gamepad input and the four driving cameras |
 | `src/world.js` | Road splines, spatial queries, terrain, structures, ramps and breakable props |
-| `src/graphics.js`, `src/postfx.js`, `src/software-view.js` | GPU presentation, traffic, effects and the software driving view |
+| `src/graphics.js`, `src/postfx.js`, `src/software-view.js` | GPU presentation, effects and the software driving view |
+| `src/traffic-physics.js`, `src/skidmarks.js`, `src/beacons.js` | Vehicle contacts, tire tracks and destination beacons |
 | `src/session.js`, `src/events.js`, `src/profile.js` | Game loop, contracts, economy and saved progress |
 | `src/main.js`, `ui/` | Driver hub, garage, map, settings, controls and HUD |
 | `models/` | Parametric vehicle meshes and orbitable garage studio |
-| `assets/`, `audio/` | Original menu and location artwork, Bay FM loop and engine synthesis |
+| `assets/`, `audio/` | Original menu and location artwork, Bay FM recordings and engine synthesis |
 | `scripts/` | Build, portable repository packaging and automated regression checks |
 
 ## Verification
 
-`npm test` exercises acceleration, reverse, controlled slip, staged nitro and re-arming, launch and landing physics, all seven meshes, a real harbour ramp, both expressway decks, resettable glass targets, speed-trap scoring, pursuit and rival outcomes, and speeds above 200 mph. Browser checks cover the driver hub, driving input, garage paint selection, camera changes and event entry.
+`npm test` covers centred and glancing impacts, momentum transfer, overpass clearance, lane recovery, tree toppling, deformation of the struck mesh and paired skid marks. It also exercises acceleration, reverse, controlled slip, staged nitro and re-arming, launch and landing physics, all seven meshes, a real harbour ramp, both expressway decks, resettable glass targets, speed-trap scoring, pursuit and rival outcomes, and speeds above 200 mph. Browser checks cover the driver hub, driving input, garage paint selection, camera changes and event entry.
 
 ## Source transfer
 
-The downloadable ZIP preserves the `main` branch and commit objects. Run `git log --oneline` in the extracted directory to inspect them. To create a public GitHub remote from a checkout on an authenticated machine:
+The downloadable ZIP preserves the `main` branch and commit objects. Run `git log --oneline` in the extracted directory to inspect them. To publish the downloadable checkout to the project’s GitHub repository, sign in with an account that can write to it, then run:
 
 ```sh
-gh repo create velocity-syndicate-3d --public --source=. --remote=origin --push
+git remote add origin https://github.com/TTTMKACKER255/velocity-syndicate-3d.git
+git push -u origin main
 ```
 
-Use `--private` for a private repository. The hosting project uses its own Git source repository. GitHub credentials are never included in the downloadable checkout.
+The hosting project uses its own Git source repository. GitHub credentials are never included in the downloadable checkout.
