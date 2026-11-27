@@ -78,7 +78,13 @@ Credits, reputation, owned cars, upgrades, appearance, collected parts, settings
 
 ## Rendering
 
-Three.js runs the hardware-accelerated renderer, with instanced scenery, a procedural sky and ocean, fog, material reflections, wet-road shading, exhaust particles and a day/night cycle. Paired tire marks follow the rear wheels according to slip, road contact and elevation. Roads and downtown blocks use local asphalt, pavement, glass, masonry and storefront textures. The **High** preset adds selective screen-space road reflections, a depth-based sunlight scattering pass and speed-dependent radial blur. The software renderer uses lower-detail scenery and cached views of the configured vehicle. The photographic hub and district images are menu artwork. The driving environment is procedural.
+Select **Settings → Time of day** to hold the world at Day, Afternoon, Evening or Night. **Auto** runs a full day in six minutes of driving. The HUD shows local time. Watch the roadside lamps from the coastal highway at dusk. Their light spreads across the asphalt as the sun sets, and knocking a pole down extinguishes it.
+
+Roads have metre-scaled aggregate, worn paint, repaired seams, drain grates and manhole covers. Drifting leaves paired tire marks that follow wheel slip and road elevation. Visit **Bayline Garage** on the coast to look through the workshop glazing. Glass-fronted cafés, offices and workshops have separate front and rear windows, furniture and simple residents who walk, sit or work.
+
+Palms have ringed trunks and individual fronds. Oaks have tapering trunks, branching limbs and leaf clusters. Wind bends branches, fronds and grass blades while their roots stay in place. Collisions tip the entire tree from its base. Close to the road, grass tufts grow over a textured ground surface and thin out towards the horizon.
+
+Three.js renders the sky, ocean, fog, wet asphalt, exhaust and nearby lamp light. The **High** preset adds directional shadows, selective screen-space road reflections, sunlight scattering and speed-dependent radial blur. The Canvas2D renderer uses lower-detail plant meshes, projected lamp pools and cached views of the configured vehicle. The photographic hub and district images are menu artwork.
 
 ## Source layout
 
@@ -87,6 +93,9 @@ Three.js runs the hardware-accelerated renderer, with instanced scenery, a proce
 | `src/physics.js`, `src/input.js`, `src/camera.js` | Fixed-step vehicle dynamics, keyboard/gamepad input and the four driving cameras |
 | `src/world.js` | Road splines, spatial queries, terrain, structures, ramps and breakable props |
 | `src/graphics.js`, `src/postfx.js`, `src/software-view.js` | GPU presentation, effects and the software driving view |
+| `src/daylight.js`, `src/streetlights.js` | Solar cycle, time presets, lamp pools and breakable lighting |
+| `src/architecture.js`, `src/vegetation.js`, `src/vegetation-software.js` | Glazed interiors, worker animation, wind and plant meshes |
+| `src/road-materials.js`, `src/environment-materials.js` | Road surfaces, markings, repairs and local material textures |
 | `src/traffic-physics.js`, `src/skidmarks.js`, `src/beacons.js` | Vehicle contacts, tire tracks and destination beacons |
 | `src/session.js`, `src/events.js`, `src/profile.js` | Game loop, contracts, economy and saved progress |
 | `src/main.js`, `ui/` | Driver hub, garage, map, settings, controls and HUD |

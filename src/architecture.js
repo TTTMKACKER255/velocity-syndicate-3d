@@ -553,7 +553,20 @@ export function queueArchitecture(queue, rooms, view) {
     for (const part of room.props) {
       if (roomDepth > part.range) continue;
       const d = depth(part.x, part.y, part.z);
-      if (d < -Math.max(part.w, part.d, part.h) * 0.6) continue;
+      const radius = Math.hypot(part.w, part.h, part.d) * 0.5;
+      if (d + radius < 0.32) continue;
+      if (!visible(part.x, part.z, radius, part.range)) continue;
+      if (view.f && d > radius + 1) {
+        // Subpixel fasteners and far mullions cannot cover a whole pixel.
+        // The second-largest dimension measures projected thickness while
+        // keeping the broad, thin glass, slabs and furniture surfaces.
+        const largest = Math.max(part.w, part.h, part.d);
+        const middle =
+          part.w + part.h + part.d - largest - Math.min(part.w, part.h, part.d);
+        const pixelsPerMetre = view.f / (d - radius);
+        if (largest * pixelsPerMetre < 1 || middle * pixelsPerMetre < 0.42)
+          continue;
+      }
       queue.push({ interior: part, d });
     }
     if (roomDepth < 98)

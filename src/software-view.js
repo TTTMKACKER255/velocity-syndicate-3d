@@ -1,11 +1,18 @@
+import { daylightAt } from "./daylight.js";
+import { drawLampPools, drawLampHead } from "./streetlights.js";
 // Perspective Canvas renderer for systems without WebGL2. The scene shares geometry,
 // instance transforms and map coordinates with the hardware renderer.
 import * as THREE from "three";
+import { queueArchitecture, paintArchitecture } from "./architecture.js";
 import { createVehicle } from "../models/vehicle.js";
 import { createWorld, groundHeight } from "./world.js";
+import { softwareAggregate } from "./road-materials.js";
+import { aggregateMetres } from "./road-materials-art.js";
 import { materialPlate } from "./environment-materials.js";
 import { drawTrafficSprite } from "../models/traffic-sprites.js";
 import { deformPanel, clearPanelDents } from "../models/damage.js";
+
+import { createSoftwarePlants } from "./vegetation-software.js";
 
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 const mod = (x, n) => ((x % n) + n) % n;
@@ -236,7 +243,12 @@ function scenery(group) {
         -9,
         9,
       );
-      data.ground.push(plane(v, hex(...base.map((q) => q + light))));
+      const tile = plane(v, hex(...base.map((q) => q + light)));
+      if (!dry && !(x > -245 && x < 322 && z < -645 && z > -1055)) {
+        tile.uv = v.map((p) => [p[0] / 4.5, p[2] / 4.5]);
+        tile.grass = true;
+      }
+      data.ground.push(tile);
     }
   const solids = group.children.filter((o) => o.isMesh && !o.isInstancedMesh);
   for (const [i, o] of solids.entries()) {
@@ -274,13 +286,42 @@ function scenery(group) {
         color.getHex(),
         i === 4 ? 3 : i === 3 ? 1 : i === 2 ? 2 : 4,
       );
-      if (o.name === "Wet asphalt" || o.name === "Stone paving") {
+      const asphalt = o.name === "Wet asphalt",
+        paint = o.name === "Road markings",
+        works = o.name === "Road service details";
+      if (asphalt || o.name === "Stone paving" || paint || works) {
         const uv = o.geometry.attributes.uv;
-        element.tex = o.name === "Wet asphalt" ? "asphalt" : "pavement";
+        element.tex = asphalt
+          ? "asphalt"
+          : paint
+            ? color.b < 0.6
+              ? "roadOchre"
+              : "roadIvory"
+            : works
+              ? "roadWorks"
+              : "pavement";
         element.uv = Array.from({ length: 4 }, (_, j) => [
           uv.getX(k + j),
           1 - uv.getY(k + j),
         ]);
+        if (asphalt) {
+          element.chipAcross = o.geometry.attributes.uv1.getX(k + 1);
+          const dx = v[1][0] - v[0][0],
+            dz = v[1][2] - v[0][2],
+            span = Math.hypot(dx, dz) || 1;
+          element.surfaceRight = [dx / span, dz / span];
+          element.wear = color.r;
+          element.c = hex(
+            73 * Math.sqrt(color.r),
+            75 * Math.sqrt(color.g),
+            76 * Math.sqrt(color.b),
+          );
+        }
+        if (paint || works) {
+          element.decal = true;
+          element.layer = works ? 2.5 : 3;
+          element.c = works ? 0x393939 : color.b < 0.6 ? 0xd5aa58 : 0xd9d7c7;
+        }
       }
       if (i === 1) data.distance.push(element);
       else data.strips.push(element);
@@ -352,6 +393,8 @@ function scenery(group) {
       }
     }
   }
+  for (const l of group.userData.streetlamps || [])
+    data.items.push({ kind: "lampGlow", lamp: l, x: l.x, y: l.y, z: l.z });
   for (const tree of group.userData.trees || [])
     data.items.push({
       kind: tree.kind === "palm" ? "palm" : "tree",
@@ -373,6 +416,8 @@ export function createSoftwareView(canvas, look = {}, worldGroup) {
   }
   const map = scenery(worldGroup),
     ctx = canvas.getContext("2d", { alpha: false });
+  const plants = createSoftwarePlants(ctx);
+  const plantView = () => ({ eye, ahead, right, up, w, h, f });
   let car = carSprites(look),
     dentList = null;
   const plateCache = new Map();
@@ -405,6 +450,7 @@ export function createSoftwareView(canvas, look = {}, worldGroup) {
     plateCache.set(key, entry);
     return entry;
   }
+  const sampleAggregate = softwareAggregate(appearance);
   const clouds = spriteCanvas(768, 160),
     cc = clouds.getContext("2d"),
     ci = cc.createImageData(768, 160);
@@ -444,6 +490,7 @@ export function createSoftwareView(canvas, look = {}, worldGroup) {
     h = 1,
     f = 1,
     night = 0,
+    solar = daylightAt(11),
     fog = [199, 209, 196],
     clock = 0,
     previousHeading = 0,
@@ -493,7 +540,21 @@ export function createSoftwareView(canvas, look = {}, worldGroup) {
       "rgb(" +
       [r, g, b]
         .map((k, i) =>
-          Math.round(clamp(k * level * (1 - mist) + fog[i] * mist, 0, 255)),
+          Math.round(
+            clamp(
+              k *
+                level *
+                (i === 0
+                  ? 1 + solar.warmth * 0.11
+                  : i === 2
+                    ? 1 - solar.warmth * 0.17
+                    : 1) *
+                (1 - mist) +
+                fog[i] * mist,
+              0,
+              255,
+            ),
+          ),
         )
         .join(",") +
       ")"
@@ -645,7 +706,7 @@ export function createSoftwareView(canvas, look = {}, worldGroup) {
     groundPixels.fill(0);
     groundScale = tw / w;
   }
-  function groundTriangle(A, B, C, entry) {
+  function groundTriangle(A, B, C, entry, chip, across, wear) {
     let rows = [A, B, C].sort((a, b) => a[1] - b[1]);
     const [a, b, c] = rows;
     if (c[1] < 0 || a[1] >= groundCanvas.height) return;
@@ -688,7 +749,20 @@ export function createSoftwareView(canvas, look = {}, worldGroup) {
           pv = v * z;
         const tx = ((pu - Math.floor(pu)) * srcW) | 0,
           ty = ((pv - Math.floor(pv)) * srcH) | 0;
-        groundPixels[write] = pixels[ty * srcW + tx];
+        const base = pixels[ty * srcW + tx];
+        if (chip && z < 27) {
+          const cu = pu * across,
+            cv = (pv - 1) * (55 / aggregateMetres);
+          const cx = ((cu - Math.floor(cu)) * chip.size) | 0;
+          const cy = ((cv - Math.floor(cv)) * chip.size) | 0;
+          const fleck = chip.values[cy * chip.size + cx];
+          const k =
+            (wear - 1) * 27 + fleck * (0.85 - z * 0.025) * (1 - night * 0.72);
+          const r = clamp((base & 255) + k, 0, 255),
+            g = clamp(((base >>> 8) & 255) + k, 0, 255);
+          const b = clamp(((base >>> 16) & 255) + k, 0, 255);
+          groundPixels[write] = (255 << 24) | (b << 16) | (g << 8) | r;
+        } else groundPixels[write] = base;
         q += dx[2];
         u += dx[3];
         v += dx[4];
@@ -697,17 +771,20 @@ export function createSoftwareView(canvas, look = {}, worldGroup) {
   }
   function groundQuad(o, entry) {
     if (!entry) return;
-    if (!entry.pixels)
-      entry.pixels = new Uint32Array(
-        entry.image
-          .getContext("2d")
-          .getImageData(
-            0,
-            0,
-            entry.image.width,
-            entry.image.height,
-          ).data.buffer,
-      );
+    const samplePixels = (m) => {
+      if (m && !m.pixels)
+        m.pixels = new Uint32Array(
+          m.image
+            .getContext("2d")
+            .getImageData(0, 0, m.image.width, m.image.height).data.buffer,
+        );
+      return m;
+    };
+    samplePixels(entry);
+    const chip =
+      o.chipAcross && visible(o.x, o.z, 18, 33)
+        ? sampleAggregate(o.surfaceRight, solar)
+        : null;
     const pts = o.p.map((v, i) => [...cameraSpace(v), ...o.uv[i]]),
       clipped = [];
     for (let i = 0; i < 4; i++) {
@@ -727,7 +804,15 @@ export function createSoftwareView(canvas, look = {}, worldGroup) {
       return [x * groundScale, y * groundScale, q, v[3] * q, v[4] * q];
     });
     for (let k = 1; k < screen.length - 1; k++)
-      groundTriangle(screen[0], screen[k], screen[k + 1], entry);
+      groundTriangle(
+        screen[0],
+        screen[k],
+        screen[k + 1],
+        entry,
+        chip,
+        o.chipAcross,
+        o.wear,
+      );
   }
   const wallCache = new Map();
   function drawFacade(face, entry, across, tall, d) {
@@ -861,8 +946,16 @@ export function createSoftwareView(canvas, look = {}, worldGroup) {
         dz = corners[j][1] - corners[i][1];
       if ((eye.x - corners[i][0]) * dz - (eye.z - corners[i][1]) * dx < 0)
         continue;
-      const shade = 1 + (dx * 0.12 - dz * 0.17) / (Math.hypot(dx, dz) || 1);
-      poly([lower[i], lower[j], upper[j], upper[i]], tint(c, distance, shade));
+      const length = Math.hypot(dx, dz) || 1;
+      const lit = Math.max(
+        0,
+        (dz * solar.direction[0] - dx * solar.direction[2]) / length,
+      );
+      const shade = 0.86 + 0.3 * lit * (1 - night);
+      poly(
+        [lower[i], lower[j], upper[j], upper[i]],
+        tint(c, distance, shade, o.glow),
+      );
       if (o.plate && distance < 650) {
         const entry = appearance(o.plate, Math.min(1, shade), distance);
         if (entry) {
@@ -899,63 +992,19 @@ export function createSoftwareView(canvas, look = {}, worldGroup) {
         }
       }
     }
-    if (eye.y > y + sy * 0.5) poly(upper, tint(c, distance, 1.11));
-  }
-  function palm(o, distance) {
-    const root = projected(o.x, o.y, o.z),
-      top = projected(o.x + 0.5, o.y + o.h, o.z);
-    if (!root || !top) return;
-    const sz = f / Math.max(near, distance),
-      ht = root[1] - top[1],
-      span = Math.abs(ht) * 0.43;
-    if (span < 1) return;
-    ctx.lineCap = "round";
-    ctx.beginPath();
-    ctx.moveTo(...root);
-    ctx.quadraticCurveTo(
-      root[0] + span * 0.16,
-      root[1] - ht * 0.5,
-      top[0],
-      top[1],
-    );
-    ctx.strokeStyle = tint(0x86795c, distance);
-    ctx.lineWidth = Math.max(0.65, 0.35 * sz);
-    ctx.stroke();
-    const sway = Math.sin(clock * 1.1 + o.seed) * 0.025;
-    for (let l = 0; l < 9; l++) {
-      const ang = l * 2.4 + o.seed * 0.39,
-        dx = Math.cos(ang) * (1.02 + 0.16 * Math.sin(ang * 3)) + sway;
-      const dy = Math.sin(ang) * 0.27 + 0.11,
-        xx = top[0],
-        yy = top[1],
-        x1 = xx + dx * span,
-        y1 = yy + dy * span;
-      ctx.fillStyle = tint(l % 2 ? 0x4e7141 : 0x64804c, distance);
-      ctx.beginPath();
-      ctx.moveTo(xx, yy);
-      ctx.quadraticCurveTo(xx + dx * span * 0.53, yy - span * 0.39, x1, y1);
-      ctx.quadraticCurveTo(xx + dx * span * 0.58, yy - span * 0.19, xx, yy);
-      ctx.fill();
-      if (distance < 105) {
-        ctx.strokeStyle = ctx.fillStyle;
-        ctx.lineWidth = Math.max(0.58, sz * 0.065);
-        ctx.beginPath();
-        for (let k = 1; k < 8; k++) {
-          const t = k / 9,
-            mpx = xx + dx * span * t,
-            mpy = yy + span * (dy * t - 0.99 * t * (1 - t));
-          ctx.moveTo(mpx, mpy);
-          ctx.lineTo(
-            mpx + span * dx * 0.12,
-            mpy + span * (0.05 + 0.12 * Math.sin(t * Math.PI)),
-          );
-        }
-        ctx.stroke();
-      }
-    }
-    ctx.lineCap = "butt";
+    if (eye.y > y + sy * 0.5) poly(upper, tint(c, distance, 1.11, o.glow));
   }
   function item(o, dist) {
+    if (o.kind === "lampGlow") {
+      drawLampHead(
+        ctx,
+        o.lamp,
+        solar.lamps,
+        projected,
+        f / Math.max(near, dist),
+      );
+      return;
+    }
     if (o.source && o.source.instanceMatrix.array[o.id * 16 + 13] < -100)
       return;
     if (o.kind === "block") {
@@ -968,37 +1017,15 @@ export function createSoftwareView(canvas, look = {}, worldGroup) {
         line(o.v[0], o.v[1], tint(o.c, dist), clamp(width, 0.56, 70));
       return;
     }
-    if (o.kind === "palm" || o.kind === "tree") {
-      const record = o.tree,
-        entry = appearance(o.kind === "palm" ? "palm" : "oak", 1, dist);
-      if (entry && dist > 0.1 && record) {
-        const ht = o.h,
-          angle = record.angle || 0,
-          sine = Math.sin(angle),
-          cosine = Math.cos(angle);
-        const root = projected(o.x, o.y, o.z),
-          tip = projected(
-            o.x + record.dx * ht * sine,
-            o.y + ht * cosine,
-            o.z + record.dz * ht * sine,
-          );
-        if (root && tip) {
-          const ox = tip[0] - root[0],
-            oy = tip[1] - root[1],
-            length = Math.hypot(ox, oy),
-            img = entry.image;
-          const width = ((img.width / img.height) * ht * f) / Math.max(1, dist);
-          const height = Math.max(
-            width * (o.kind === "tree" ? 0.61 : 0.2),
-            length,
-          );
-          ctx.save();
-          ctx.translate(root[0], root[1]);
-          ctx.rotate(Math.atan2(ox, -oy));
-          ctx.drawImage(img, -width / 2, -height, width, height);
-          ctx.restore();
-        }
-      } else palm(o, dist);
+    if (o.tree) {
+      plants.drawTree(
+        o.tree,
+        plantView(),
+        dist,
+        clock,
+        night,
+        typeof solar === "undefined" ? null : solar,
+      );
       return;
     }
     if (o.kind === "sign") {
@@ -1055,9 +1082,13 @@ export function createSoftwareView(canvas, look = {}, worldGroup) {
       0,
       Math.max(2, horizon),
     );
-    sky.addColorStop(0, color(0x559cd0, 0x172944));
-    sky.addColorStop(0.61, color(0x92c1d2, 0x273951));
-    sky.addColorStop(1, color(0xe4deca, 0x58606e));
+    const css = (rgb) => "rgb(" + rgb.map(Math.round).join(",") + ")";
+    sky.addColorStop(0, css(solar.sky));
+    sky.addColorStop(
+      0.62,
+      css(solar.sky.map((c, i) => c * 0.62 + solar.horizon[i] * 0.38)),
+    );
+    sky.addColorStop(1, css(solar.horizon));
     ctx.fillStyle = sky;
     ctx.fillRect(0, 0, w, h);
     if (night < 0.98) {
@@ -1072,20 +1103,21 @@ export function createSoftwareView(canvas, look = {}, worldGroup) {
         ctx.drawImage(clouds, cx, horizon - hh * 0.93, span, hh);
       ctx.globalAlpha = 1;
     }
-    // Bright marine haze and the sun remain world-fixed as the camera turns.
-    const sun = projected(eye.x - 1120, eye.y + 690, eye.z - 1940);
-    if (sun && sun[0] > -w * 0.4 && sun[0] < w * 1.4) {
-      const radius = h * 0.17,
-        g = ctx.createRadialGradient(...sun, radius * 0.04, ...sun, radius);
-      g.addColorStop(
-        0,
-        night > 0.7 ? "rgba(212,225,243,.7)" : "rgba(255,244,191,.94)",
-      );
-      g.addColorStop(
-        0.11,
-        night > 0.7 ? "rgba(179,213,248,.25)" : "rgba(255,236,166,.72)",
-      );
-      g.addColorStop(1, "rgba(255,240,187,0)");
+    const [sx, sy, sz] = solar.direction;
+    const sun = projected(
+      eye.x + sx * 2300,
+      eye.y + sy * 2300,
+      eye.z + sz * 2300,
+    );
+    if (sun && sy > -0.045 && sun[0] > -w * 0.4 && sun[0] < w * 1.4) {
+      const radius = h * (0.13 + 0.08 * solar.golden),
+        rgb = solar.sunColor.map(Math.round).join(",");
+      const g = ctx.createRadialGradient(...sun, 0, ...sun, radius);
+      g.addColorStop(0, "rgba(255,247,213,.98)");
+      g.addColorStop(0.055, "rgba(255,235,186,.98)");
+      g.addColorStop(0.075, "rgba(" + rgb + ",.64)");
+      g.addColorStop(0.32, "rgba(" + rgb + ",.2)");
+      g.addColorStop(1, "rgba(" + rgb + ",0)");
       ctx.fillStyle = g;
       ctx.fillRect(sun[0] - radius, sun[1] - radius, radius * 2, radius * 2);
     }
@@ -1099,7 +1131,10 @@ export function createSoftwareView(canvas, look = {}, worldGroup) {
     }
     if (horizon < h) {
       const sea = ctx.createLinearGradient(0, horizon, 0, h);
-      sea.addColorStop(0, color(0x9bb9bd, 0x3b5266));
+      sea.addColorStop(
+        0,
+        css(solar.haze.map((c, i) => c * (i === 0 ? 0.75 : 0.85))),
+      );
       sea.addColorStop(0.13, color(0x6ea7ae, 0x2b4859));
       sea.addColorStop(1, color(0x347d83, 0x173744));
       ctx.fillStyle = sea;
@@ -1350,6 +1385,7 @@ export function createSoftwareView(canvas, look = {}, worldGroup) {
     mission = null,
     parts = [],
     overlays = null,
+    daylight = null,
   ) {
     const dents = p.dents || null;
     if (dents !== dentList) {
@@ -1361,7 +1397,8 @@ export function createSoftwareView(canvas, look = {}, worldGroup) {
     h = canvas.height || 1;
     clock = t;
     night = clamp(nightness, 0, 1);
-    fog = [201 - 137 * night, 208 - 135 * night, 197 - 108 * night];
+    solar = daylight || daylightAt(11 + night * 11);
+    fog = solar.haze;
     setCamera(p, index, t, mission);
     drawSky();
     const drawTerrain = (array, range, margin, sortedByLayer = false) => {
@@ -1369,7 +1406,7 @@ export function createSoftwareView(canvas, look = {}, worldGroup) {
       for (const o of array) {
         if (!visible(o.x, o.z, margin, range)) continue;
         const d = depth(o.x, o.p[0][1], o.z);
-        if (o.layer === 3 && d > 390) continue;
+        if ((o.layer === 3 && d > 390) || (o.layer === 2.5 && d > 75)) continue;
         list.push({ o, d });
       }
       list.sort(
@@ -1390,6 +1427,15 @@ export function createSoftwareView(canvas, look = {}, worldGroup) {
       }
       for (const { o, d } of list) {
         if (o.layer > 2 && painted) compositeGround();
+        if (o.decal) {
+          const surface =
+            d < (o.layer === 3 ? 36 : 65)
+              ? appearance(o.tex, 1, d > 25 ? 160 : 0)
+              : null;
+          if (surface) texturedQuad(o.p, o.uv, surface, d < 14 ? 5 : 2);
+          else if (o.layer === 3) poly(o.p, tint(o.c, d));
+          continue;
+        }
         poly(o.p, tint(o.c, d), o.layer === 2);
         if (o.tex && d < 145) {
           const entry = appearance(o.tex, 1, d > 65 ? 350 : d > 26 ? 160 : 0);
@@ -1401,9 +1447,45 @@ export function createSoftwareView(canvas, look = {}, worldGroup) {
     };
     drawTerrain(map.distance, 4100, 220);
     drawTerrain(map.ground, 1200, 93);
+    beginGround();
+    for (const tile of map.ground) {
+      if (!tile.grass || !visible(tile.x, tile.z, 52, 95)) continue;
+      const d = depth(tile.x, tile.p[0][1], tile.z);
+      const tex = appearance("meadow", 1, d > 52 ? 350 : d > 22 ? 160 : 0);
+      if (tex) groundQuad(tile, tex);
+    }
+    groundCtx.putImageData(groundImage, 0, 0);
+    ctx.drawImage(groundCanvas, 0, 0, w, h);
     drawTerrain(map.strips, 720, 24, true);
+    plants.drawGroundcover(
+      worldGroup.userData.vegetation,
+      plantView(),
+      clock,
+      night,
+    );
     overlays?.marks?.drawSoftware(poly, p);
+    drawLampPools(
+      ctx,
+      worldGroup.userData.streetlamps || [],
+      solar.lamps,
+      visible,
+      projected,
+    );
     const visibleItems = [];
+    const interiorView = {
+      visible,
+      depth,
+      time: clock,
+      ctx,
+      block,
+      poly,
+      projected,
+      tint,
+      line,
+      f,
+      night,
+    };
+    queueArchitecture(visibleItems, worldGroup.userData.rooms, interiorView);
     for (const o of map.items) {
       const radius =
         o.kind === "block"
@@ -1426,8 +1508,9 @@ export function createSoftwareView(canvas, look = {}, worldGroup) {
         d < 132 &&
         night < 0.8
       ) {
-        const sx = -o.h * 0.54,
-          sz = o.h * 0.22,
+        const length = o.h / Math.max(0.26, solar.direction[1]),
+          sx = -solar.direction[0] * length,
+          sz = -solar.direction[2] * length,
           sy = groundHeight(o.x + sx, o.z + sz) + 0.32;
         const a = [o.x, o.y + 0.28, o.z],
           b = [o.x + sx, sy, o.z + sz],
@@ -1486,7 +1569,8 @@ export function createSoftwareView(canvas, look = {}, worldGroup) {
     }
     visibleItems.sort((a, b) => b.d - a.d);
     for (const el of visibleItems) {
-      if (el.o) item(el.o, el.d);
+      if (el.interior) paintArchitecture(el.interior, el.d, interiorView);
+      else if (el.o) item(el.o, el.d);
       else if (el.mesh) trafficCar(el.mesh, el.d, el.id);
       else if (el.gate) gate(waypoint);
       else if (el.part) {

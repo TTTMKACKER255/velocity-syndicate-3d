@@ -1,7 +1,10 @@
 // Local material plates are shared by WebGL and the perspective Canvas renderer.
 import * as THREE from "three";
 
+import { roadArt } from "./road-materials-art.js";
+
 const definitions = {
+  ...roadArt,
   glass: [new URL("../assets/bay-glass.webp", import.meta.url), 18, 19],
   residence: [new URL("../assets/bay-residence.webp", import.meta.url), 16, 14],
   limestone: [new URL("../assets/bay-limestone.webp", import.meta.url), 13, 14],
@@ -11,8 +14,11 @@ const definitions = {
   lobby: [new URL("../assets/bay-lobby.webp", import.meta.url), 17, 4],
   depot: [new URL("../assets/bay-depot.webp", import.meta.url), 19, 4],
   asphalt: [new URL("../assets/bay-asphalt.webp", import.meta.url), 23, 55],
-  palm: [new URL("../assets/bay-palm.webp", import.meta.url), 0.6, 1],
-  oak: [new URL("../assets/bay-oak.webp", import.meta.url), 1.09, 1],
+  meadow: [
+    new URL("../assets/bay-groundcover.webp", import.meta.url),
+    4.5,
+    4.5,
+  ],
   pavement: [new URL("../assets/bay-pavement.webp", import.meta.url), 6.4, 6.4],
 };
 const images = new Map();

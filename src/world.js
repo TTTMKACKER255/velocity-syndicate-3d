@@ -1,6 +1,13 @@
 // All horizontal distances are metres. Heading zero points north (-Z).
 import * as THREE from "three";
+import { createArchitecture } from "./architecture.js";
+import { streetlightPower } from "./daylight.js";
+import { recordStreetlight } from "./streetlights.js";
+import { aggregateMetres } from "./road-materials-art.js";
+import { roadMaterial, paintMaterial, roadDetails } from "./road-materials.js";
 import { architectureMaterial, textureFor } from "./environment-materials.js";
+
+import { createVegetation, meadowMaterial } from "./vegetation.js";
 
 const clamp = (value, low, high) => Math.min(high, Math.max(low, value));
 function smooth(a, b, value) {
@@ -463,7 +470,7 @@ function makeTerrain(root) {
   meshGeo.setAttribute("position", new THREE.Float32BufferAttribute(coords, 3));
   meshGeo.setAttribute("color", new THREE.Float32BufferAttribute(rgb, 3));
   meshGeo.computeVertexNormals();
-  root.add(new THREE.Mesh(meshGeo, geometricMaterial()));
+  root.add(new THREE.Mesh(meshGeo, meadowMaterial(textureFor("meadow"))));
   const distant = [
     new THREE.Color("#827e78"),
     new THREE.Color("#9ca3a0"),
@@ -551,25 +558,34 @@ function makeOcean(root) {
   };
 }
 
+function roadCorner(s, d, height) {
+  const x = s.x + Math.cos(s.heading) * d,
+    z = s.z - Math.sin(s.heading) * d;
+  return [x, groundHeight(x, z) + (s.elevation || 0) + height, z];
+}
 function routeStrip(builder, p, q, left, right, height, color) {
-  function at(s, d) {
-    const x = s.x + Math.cos(s.heading) * d,
-      z = s.z - Math.sin(s.heading) * d;
-    return [x, groundHeight(x, z) + (s.elevation || 0) + height, z];
-  }
-  builder.quad(at(p, left), at(p, right), at(q, right), at(q, left), color);
+  builder.quad(
+    roadCorner(p, left, height),
+    roadCorner(p, right, height),
+    roadCorner(q, right, height),
+    roadCorner(q, left, height),
+    color,
+  );
 }
 function makeRoads(root) {
   const asphalt = stripBuilder(),
     roadUV = [],
+    aggregateUV = [],
+    details = roadDetails(),
+    paintUV = [],
     pavingUV = [],
     stone = stripBuilder(),
     lines = stripBuilder();
-  const black = new THREE.Color("#45484a"),
+  const wear = new THREE.Color(),
     sidewalk = new THREE.Color("#b9b6aa"),
     shoulder = new THREE.Color("#ad9a78");
-  const white = new THREE.Color("#dbdad2"),
-    yellow = new THREE.Color("#eeb84e");
+  const white = new THREE.Color("#ffffff"),
+    yellow = new THREE.Color("#ffcd5f");
   roads.forEach((rd, i) => {
     const length = roadLengths[i],
       half = rd.width / 2,
@@ -584,12 +600,38 @@ function makeRoads(root) {
       const p = endpoint(d),
         q = endpoint(d + step),
         mid = endpoint(d + step * 0.5);
-      routeStrip(asphalt, p, q, -half, half, h, black);
+      const corners = [
+        roadCorner(p, -half, h),
+        roadCorner(p, half, h),
+        roadCorner(q, half, h),
+        roadCorner(q, -half, h),
+      ];
+      const patina =
+        (i === 1 || i === 11 ? 1.12 : i === 2 || i === 10 ? 0.8 : 0.98) +
+        0.095 * Math.sin(d * 0.036 + i) +
+        0.07 * Math.cos(d * 0.079);
+      wear.setRGB(
+        patina,
+        patina * (i === 1 ? 0.97 : 1),
+        patina * (i === 1 ? 0.9 : 1.014),
+      );
+      asphalt.quad(...corners, wear);
       const nextD = Math.min(length, d + step),
         v0 = d / 55,
         v1 = nextD / 55;
       roadUV.push(0, v0, 1, v0, 1, v1, 0, v1);
+      const u1 = rd.width / aggregateMetres,
+        ta = d / aggregateMetres,
+        tb = nextD / aggregateMetres;
+      aggregateUV.push(0, ta, u1, ta, u1, tb, 0, tb);
       if (mid.elevation < 1 && roadAt(mid.x, mid.z, 1, i, true)) continue;
+      details.populate(corners, i, d, nextD - d, rd.width);
+      const stripe = (left, right, lift, col) => {
+        routeStrip(lines, p, q, left, right, h + lift, col);
+        const va = d / 1.15,
+          vb = nextD / 1.15;
+        paintUV.push(0, va, 1, va, 1, vb, 0, vb);
+      };
       const walk = i === expressway ? 0.65 : i === 1 || i === 11 ? 1.3 : 2.6;
       for (const s of [-1, 1]) {
         routeStrip(
@@ -601,15 +643,7 @@ function makeRoads(root) {
           h + 0.14,
           i === 1 || i === 11 ? shoulder : sidewalk,
         );
-        routeStrip(
-          lines,
-          p,
-          q,
-          s * (half - 0.68),
-          s * (half - 0.51),
-          h + 0.024,
-          white,
-        );
+        stripe(s * (half - 0.68), s * (half - 0.51), 0.024, white);
         pavingUV.push(
           0,
           d / 6.4,
@@ -663,50 +697,16 @@ function makeRoads(root) {
           );
         }
         if (rd.width >= 18 && Math.floor(d / step) % 3 === 0)
-          routeStrip(
-            lines,
-            p,
-            q,
-            s * (half * 0.5 - 0.07),
-            s * (half * 0.5 + 0.07),
-            h + 0.03,
-            white,
-          );
+          stripe(s * (half * 0.5 - 0.07), s * (half * 0.5 + 0.07), 0.03, white);
       }
-      routeStrip(lines, p, q, -0.21, -0.075, h + 0.03, yellow);
-      routeStrip(lines, p, q, 0.075, 0.21, h + 0.03, yellow);
+      stripe(-0.21, -0.075, 0.03, yellow);
+      stripe(0.075, 0.21, 0.03, yellow);
     }
   });
-  const roadMat = geometricMaterial({
-    map: textureFor("asphalt"),
-    vertexColors: false,
-    roughness: 0.69,
-    metalness: 0.12,
-  });
-  roadMat.onBeforeCompile = (shader) => {
-    shader.vertexShader = "varying vec3 roadWorld;\n" + shader.vertexShader;
-    shader.vertexShader = shader.vertexShader.replace(
-      "#include <worldpos_vertex>",
-      "#include <worldpos_vertex>\nroadWorld=(modelMatrix*vec4(transformed,1.)).xyz;",
-    );
-    shader.fragmentShader = "varying vec3 roadWorld;\n" + shader.fragmentShader;
-    shader.fragmentShader = shader.fragmentShader.replace(
-      "#include <color_fragment>",
-      `#include <color_fragment>
-      float rd=length(cameraPosition-roadWorld);
-      float grit=fract(sin(dot(floor(roadWorld.xz*14.),vec2(12.9898,78.233)))*43758.5453);
-      diffuseColor.rgb*=1.+(grit-.5)*.13*(1.-smoothstep(13.,78.,rd));
-      float glint=pow(1.-max(normalize(cameraPosition-roadWorld).y,0.),9.);
-      float wetPatch=smoothstep(.15,.85,sin(roadWorld.x*.08+sin(roadWorld.z*.07))*.4+.5);
-      diffuseColor.rgb+=vec3(.028,.039,.044)*wetPatch*glint;`,
-    );
-    shader.fragmentShader = shader.fragmentShader.replace(
-      "#include <roughnessmap_fragment>",
-      "#include <roughnessmap_fragment>\nroughnessFactor=mix(roughnessFactor,.13,wetPatch*.85);",
-    );
-  };
+  const roadMat = roadMaterial();
   const roadGeo = asphalt.finish();
   roadGeo.setAttribute("uv", new THREE.Float32BufferAttribute(roadUV, 2));
+  roadGeo.setAttribute("uv1", new THREE.Float32BufferAttribute(aggregateUV, 2));
   const roadMesh = new THREE.Mesh(roadGeo, roadMat);
   roadMesh.name = "Wet asphalt";
   roadMesh.receiveShadow = true;
@@ -723,7 +723,12 @@ function makeRoads(root) {
   );
   pavement.name = "Stone paving";
   root.add(pavement);
-  root.add(new THREE.Mesh(lines.finish(), geometricMaterial()));
+  const paintGeo = lines.finish();
+  paintGeo.setAttribute("uv", new THREE.Float32BufferAttribute(paintUV, 2));
+  const markings = new THREE.Mesh(paintGeo, paintMaterial());
+  markings.name = "Road markings";
+  markings.receiveShadow = true;
+  root.add(markings, details.finish());
 }
 
 const rotation = new THREE.Euler(),
@@ -788,86 +793,6 @@ function makeBatches(root) {
   return { create, finish, standard };
 }
 
-function palmGeometry() {
-  const pos = [],
-    col = [],
-    idx = [],
-    tan = new THREE.Color("#83785b"),
-    bark = new THREE.Color("#9d8a68");
-  function vert(x, y, z, c) {
-    pos.push(x, y, z);
-    col.push(c.r, c.g, c.b);
-    return pos.length / 3 - 1;
-  }
-  const sides = 8,
-    rings = 11,
-    H = 10.8;
-  for (let j = 0; j <= rings; j++) {
-    const t = j / rings,
-      r = 0.21 + 0.16 * (1 - t) ** 3 + 0.027 * (j % 2);
-    for (let k = 0; k < sides; k++) {
-      const a = (k * 2 * Math.PI) / sides;
-      vert(
-        0.65 * t * t + Math.cos(a) * r,
-        H * t,
-        Math.sin(a) * r,
-        j % 2 === 0 ? tan : bark,
-      );
-    }
-    if (j)
-      for (let k = 0; k < sides; k++) {
-        const i = (j - 1) * sides + k,
-          n = (j - 1) * sides + ((k + 1) % sides);
-        idx.push(i, i + sides, n, n, i + sides, n + sides);
-      }
-  }
-  const rng = randomSource(241),
-    greens = ["#476b38", "#52703d", "#607e46", "#456137"].map(
-      (c) => new THREE.Color(c),
-    );
-  for (let f = 0; f < 12; f++) {
-    const angle = f * 2.39996,
-      L = 3.6 + rng() * 1.6,
-      rise = 1.3 + rng() * 1.2,
-      droop = f % 3 === 0 ? 4.7 : 3.1;
-    const dir = [Math.cos(angle), Math.sin(angle)],
-      side = [-dir[1], dir[0]],
-      leaf = greens[f % 4];
-    function p(t, w, dy = 0) {
-      return [
-        0.65 + dir[0] * L * t + side[0] * w,
-        H + rise * Math.sin(t * Math.PI * 0.92) - droop * t * t + dy,
-        dir[1] * L * t + side[1] * w,
-      ];
-    }
-    for (let j = 0; j < 11; j++) {
-      const t = j / 11,
-        end = (j + 1) / 11;
-      const a = vert(...p(t, -0.033), leaf),
-        b = vert(...p(t, 0.033), leaf),
-        c = vert(...p(end, 0.025), leaf),
-        d = vert(...p(end, -0.025), leaf);
-      idx.push(a, c, b, a, d, c);
-      for (const s of [-1, 1]) {
-        const w = (0.15 + 0.65 * Math.sin(t * Math.PI)) * (1 - 0.32 * t);
-        const k = vert(...p(t, 0), leaf),
-          l = vert(...p(end, 0.09 * s), leaf),
-          outer = vert(
-            ...p(Math.min(1, t + 0.145), w * s, -0.24 - 0.26 * t),
-            leaf,
-          );
-        idx.push(k, l, outer);
-      }
-    }
-  }
-  const g = new THREE.BufferGeometry();
-  g.setIndex(idx);
-  g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
-  g.setAttribute("color", new THREE.Float32BufferAttribute(col, 3));
-  g.computeVertexNormals();
-  return g;
-}
-
 function createSign(
   root,
   text,
@@ -914,21 +839,13 @@ function createSign(
   root.add(mesh);
 }
 function createScenery(root, night) {
+  const architecture = createArchitecture(root);
   const rng = randomSource(671041),
     batches = makeBatches(root);
   const box = new THREE.BoxGeometry(),
     blocks = batches.create(box);
   const buildings = Object.fromEntries(
-    [
-      "glass",
-      "residence",
-      "brick",
-      "limestone",
-      "cafe",
-      "workshop",
-      "lobby",
-      "depot",
-    ].map((name) => [
+    ["glass", "residence", "brick", "limestone"].map((name) => [
       name,
       batches.create(box.clone(), architectureMaterial(name, night), true),
     ]),
@@ -943,21 +860,7 @@ function createScenery(root, night) {
     new THREE.IcosahedronGeometry(1, 1),
     batches.standard,
   );
-  const palms = batches.create(palmGeometry(), geometricMaterial(), true);
   const fence = batches.create(box.clone());
-  const foliage = {};
-  for (const kind of ["palm", "oak"]) {
-    const mat = new THREE.MeshStandardMaterial({
-      map: textureFor(kind),
-      alphaTest: 0.35,
-      side: THREE.DoubleSide,
-      roughness: 1,
-    });
-    mat.userData.foliage = true;
-    const geometry = new THREE.PlaneGeometry(kind === "palm" ? 0.75 : 1.2, 1);
-    geometry.translate(0, 0.5, 0);
-    foliage[kind] = batches.create(geometry, mat, true);
-  }
   const collisions = new Map(),
     ramps = [],
     forest = [],
@@ -1010,17 +913,18 @@ function createScenery(root, night) {
   function palm(x, z, h = 1, rotation = rng() * 6.28) {
     const y = groundHeight(x, z);
     if (y < 1) return;
-    const id = palms.add(transform(x, y, z, h, h, h, rotation));
-    treeRecord("palm", x, y, z, 10.8 * h, [[palms, id]], 0.34 * h);
+    treeRecord("palm", x, y, z, 10.8 * h, rotation, 0.34 * h);
   }
-  function treeRecord(kind, x, y, z, height, parts, radius) {
+  function treeRecord(kind, x, y, z, height, rotation, radius) {
     const tree = {
       kind,
       x,
       y,
       z,
       height,
-      parts,
+      rotation,
+      variant: forest.length % 2,
+      visualHeight: height * (kind === "palm" ? 1.24 : 1),
       fallen: false,
       progress: 0,
       angle: 0,
@@ -1028,23 +932,6 @@ function createScenery(root, night) {
       dz: 0,
       started: 0,
     };
-    // The intersecting cutouts carry individual leaves, while the 3D trunk and crown carry volume.
-    const cardHeight = kind === "palm" ? height * 1.27 : height;
-    for (let i = 0; i < 2; i++) {
-      const index = foliage[kind].add(
-        transform(
-          x,
-          y,
-          z,
-          cardHeight,
-          cardHeight,
-          cardHeight,
-          Math.PI * 0.5 * i + Math.sin(x + z),
-        ),
-      );
-      tree.parts.push([foliage[kind], index]);
-    }
-    tree.visualHeight = cardHeight;
     forest.push(tree);
     solid(x, z, radius, radius, y, height, { tree });
     return tree;
@@ -1101,22 +988,41 @@ function createScenery(root, night) {
               : Math.floor(Math.abs(cx + cz)) % 3 === 0
                 ? "limestone"
                 : "glass";
-      const facade = buildings[style],
-        shop =
-          buildings[
-            style === "residence"
-              ? "cafe"
-              : style === "brick"
-                ? "depot"
-                : "lobby"
-          ];
+      const facade = buildings[style];
+      const seed = Math.floor(Math.abs(cx * 17 + cz * 9));
       const podium = Math.min(4.6, Math.max(3.05, h * 0.24));
-      shop.add(
-        transform(cx, base + podium * 0.5, cz, w + 1.8, podium, d + 1.8),
-        "#faf8ef",
-      );
+      architecture.add({
+        x: cx,
+        y: base,
+        z: cz,
+        w: w + 1.8,
+        d: d + 1.8,
+        h: podium,
+        seed,
+        kind:
+          style === "residence"
+            ? "cafe"
+            : style === "brick"
+              ? "depot"
+              : "lobby",
+      });
+      const galleryHeight =
+        h - podium > 6 && (seed % 3 === 0 || cx > 165) ? 3.15 : 0;
+      if (galleryHeight)
+        architecture.add({
+          x: cx,
+          y: base + podium,
+          z: cz,
+          w,
+          d,
+          h: galleryHeight,
+          kind: style === "residence" ? "home" : "office",
+          seed: seed + 7,
+          upper: true,
+        });
+      const upperBase = podium + galleryHeight;
       facade.add(
-        transform(cx, base + (h + podium) * 0.5, cz, w, h - podium, d),
+        transform(cx, base + (h + upperBase) * 0.5, cz, w, h - upperBase, d),
         "#fcfbf3",
       );
       blocks.add(
@@ -1219,14 +1125,34 @@ function createScenery(root, night) {
   for (const v of frontage) {
     const { x, z, w, d, h } = v,
       y = groundHeight(x, z);
-    buildings[v.base].add(transform(x, y + h * 0.5, z, w, h, d), "#fffdf5");
+    architecture.add({
+      x,
+      y,
+      z,
+      w,
+      d,
+      h,
+      kind: v.upper ? "lobby" : "workshop",
+      seed: v.upper ? 131 : 32,
+    });
     blocks.add(
       transform(x, y + h + 0.16, z, w + 0.8, 0.34, d + 0.9),
       "#a59c8e",
     );
     if (v.upper) {
+      architecture.add({
+        x,
+        y: y + h,
+        z,
+        w: w - 0.6,
+        d: d - 1,
+        h: 2.92,
+        kind: "home",
+        seed: 133,
+        upper: true,
+      });
       buildings[v.upper].add(
-        transform(x, y + h + 2.75, z, w - 0.6, 5.5, d - 1.0),
+        transform(x, y + h + 4.21, z, w - 0.6, 2.58, d - 1.0),
         "#fff8e8",
       );
       blocks.add(transform(x, y + h + 5.7, z, w, 0.35, d - 0.4), "#c4b9a0");
@@ -1260,6 +1186,8 @@ function createScenery(root, night) {
     );
     solid(x, z, w * 0.5, d * 0.5, y, h + (v.upper ? 5.7 : 0.4));
   }
+  const streetlamps = [];
+  root.userData.streetlamps = streetlamps;
   const lampHeadMaterial = new THREE.MeshStandardMaterial({
     color: "#f1eadc",
     emissive: "#ffe6be",
@@ -1302,6 +1230,7 @@ function createScenery(root, night) {
       ],
     ];
     const obj = { alive: true, parts, x, z };
+    recordStreetlight(streetlamps, obj, y, dx, dz, groundHeight);
     solid(x, z, 0.28, 0.28, y, h, obj);
   }
   function barrier(x, z, a, y = groundHeight(x, z)) {
@@ -1568,41 +1497,7 @@ function createScenery(root, night) {
       tone = trees[Math.floor(rng() * trees.length)];
     if (rng() > 0.77) {
       const h = size * 1.4;
-      const parts = [];
-      parts.push([
-        posts,
-        posts.add(transform(x, y + h * 0.48, z, 0.27, h, 0.27), "#776650"),
-      ]);
-      parts.push([
-        shrubs,
-        shrubs.add(
-          transform(
-            x,
-            y + h,
-            z,
-            size * 0.9,
-            size * 0.82,
-            size * 0.88,
-            rng() * 6,
-          ),
-          tone,
-        ),
-      ]);
-      parts.push([
-        shrubs,
-        shrubs.add(
-          transform(
-            x + size * 0.53,
-            y + h - 0.55,
-            z + 0.22,
-            size * 0.68,
-            size * 0.61,
-            size * 0.64,
-          ),
-          tone,
-        ),
-      ]);
-      treeRecord("oak", x, y, z, h + size * 0.82, parts, 0.35);
+      treeRecord("oak", x, y, z, h + size * 0.82, rng() * 6, 0.35);
     } else if (rng() > 0.36)
       boulder.add(
         transform(
@@ -1917,25 +1812,36 @@ function createScenery(root, night) {
     trialBoards.set(prop.boardId, prop);
     solid(x, z, 1.65, 1.65, y, 2.8, prop);
   }
-  // Preserve each local piece before batching so fall animation can rotate the whole tree around its roots.
-  for (const tree of forest)
-    tree.parts = tree.parts.map(([batch, id]) => ({
-      batch,
-      id,
-      bind: batch.items[id].matrix.clone(),
-    }));
+  architecture.bake();
   batches.finish();
-  for (const tree of forest)
-    for (const { batch, id } of tree.parts) {
-      const refs = (batch.mesh.userData.trees ??= new Map());
-      refs.set(id, tree);
-    }
   root.userData.trees = forest;
-  const hinge = new THREE.Matrix4(),
-    turn = new THREE.Matrix4(),
-    back = new THREE.Matrix4(),
-    finalM = new THREE.Matrix4(),
-    axis = new THREE.Vector3();
+  const vegetation = createVegetation(root, forest, (x, z) => {
+    if (shoreDepth(x, z) < 26 || roadAt(x, z, 4.5)) return null;
+    // Concrete container yards, public forecourts and the landscaped building
+    // setbacks are kept clear of wild grass, regardless of camera distance.
+    if (x > -245 && x < 322 && z < -645 && z > -1055) return null;
+    if (
+      frontage.some(
+        (v) =>
+          Math.abs(x - v.x) < v.w * 0.5 + 8 &&
+          Math.abs(z - v.z) < v.d * 0.5 + 3,
+      )
+    )
+      return null;
+    for (const o of collisions.get(key(x, z)) || empty) {
+      if (
+        !o.smash &&
+        Math.abs(o.x - x) < o.rx + 4 &&
+        Math.abs(o.z - z) < o.rz + 4
+      )
+        return null;
+    }
+    return {
+      height: groundHeight(x, z),
+      urban: x > -320 && x < 285 && z > -645 && z < 550,
+    };
+  });
+  root.userData.vegetation = vegetation;
   function animateTrees(time) {
     simulationTime = time;
     for (let i = falling.length - 1; i >= 0; i--) {
@@ -1950,17 +1856,6 @@ function createScenery(root, night) {
         tree.height,
       );
       tree.angle = (Math.PI * 0.47 - inclination) * (t * t * (2 - t));
-      hinge.makeTranslation(tree.x, tree.y, tree.z);
-      turn.makeRotationAxis(axis.set(tree.dz, 0, -tree.dx), tree.angle);
-      back.makeTranslation(-tree.x, -tree.y, -tree.z);
-      hinge.multiply(turn).multiply(back);
-      for (const part of tree.parts) {
-        part.batch.mesh.setMatrixAt(
-          part.id,
-          finalM.multiplyMatrices(hinge, part.bind),
-        );
-        part.batch.mesh.instanceMatrix.needsUpdate = true;
-      }
       if (t >= 1) falling.splice(i, 1);
     }
   }
@@ -2073,9 +1968,11 @@ function createScenery(root, night) {
     resetBoards,
     boardAt: (id) => trialBoards.get(id),
     trees: forest,
-    update(n, time) {
+    update(n, time, player) {
       animateTrees(time);
-      lampHeadMaterial.emissiveIntensity = 0.3 + n * 2.7;
+      vegetation.update(time, player);
+      architecture.update(time, player, n);
+      lampHeadMaterial.emissiveIntensity = streetlightPower(n) * 3.4;
     },
   };
 }
@@ -2096,10 +1993,10 @@ export function createWorld(scene) {
     surface: scenery.surface,
     resetBoards: scenery.resetBoards,
     boardAt: scenery.boardAt,
-    update(time, nightBlend = 0) {
+    update(time, nightBlend = 0, player) {
       night.value = clamp(Number(nightBlend) || 0, 0, 1);
       ocean(time, night.value);
-      scenery.update(night.value, time);
+      scenery.update(night.value, time, player);
     },
     dispose() {
       const geometries = new Set(),
