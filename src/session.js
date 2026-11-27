@@ -198,6 +198,8 @@ export class Session {
           oldY = p.y;
         stepVehicle(p, inp, this.tune, this.world.surface);
         const hit = this.world.collide(p);
+        const impactSpeed = Math.abs(p.speed);
+        if (hit.material) this.audio.impact(impactSpeed, hit.material);
         if (hit.solid) {
           p.x = oldX;
           p.z = oldZ;
@@ -206,15 +208,14 @@ export class Session {
           p.travel = p.heading;
         }
         if (hit.trees) {
-          const impactSpeed = Math.abs(p.speed);
           if (hit.tree) this.graphics.treeDent(p, hit.tree, impactSpeed);
           p.speed *= 0.68;
-          this.audio.impact(impactSpeed, true);
+          this.audio.impact(impactSpeed, "tree");
           this.hooks.notice("Tree down");
         }
         const contact = this.graphics.stepTraffic(STEP, p, m, this.startAt);
         if (contact && this.clock - this.lastBump > 0.65) {
-          this.audio.impact(contact);
+          this.audio.impact(contact, "car");
           this.hooks.notice("Traffic impact");
           this.lastBump = this.clock;
         }

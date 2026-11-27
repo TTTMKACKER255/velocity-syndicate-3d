@@ -1,3 +1,4 @@
+import { RadioStation } from "../audio/radio.js";
 import { timeModes } from "./daylight.js";
 import "../ui/style.css";
 import { icon, logo } from "../ui/icons.js";
@@ -31,15 +32,15 @@ const app = document.querySelector("#app"),
   toastEl = document.querySelector("#toast");
 const profile = readProfile(),
   audio = new GameAudio(),
-  radio = new Audio();
-radio.preload = "none";
-let songIndex = 0,
-  playRequest = 0,
-  mapCategory = "places",
+  radio = new RadioStation(new Audio(), tracks, refreshRadio, (e) => {
+    notice(
+      e?.name === "NotAllowedError"
+        ? "Select Bay FM and press Play to start music."
+        : "Bay FM could not load this recording. Select another track.",
+    );
+  });
+let mapCategory = "places",
   returnPose = null;
-radio.src = tracks[songIndex].src;
-radio.loop = false;
-radio.volume = 0.22;
 audio.enabled = profile.settings.sound;
 const input = new Controls(action);
 let screen = "hub",
@@ -53,7 +54,6 @@ let screen = "hub",
   mapResize = null,
   mapEpoch = 0;
 let launchBusy = false,
-  radioActive = false,
   dialogKind = "",
   toastTimer,
   radioTimer,
@@ -140,15 +140,15 @@ function shell(content) {
 function footer() {
   return (
     '<footer class="footer"><button class="radio-line" data-act="radio" aria-pressed="' +
-    radioActive +
+    radio.playing +
     '" title="Play or pause Bay FM">' +
     icon("radio", 20) +
     '<b>BAY FM</b><span class="footer-sep"></span><span class="station-track">' +
-    (radioActive
-      ? tracks[songIndex].artist + " · " + tracks[songIndex].title
+    (radio.playing
+      ? tracks[radio.index].artist + " · " + tracks[radio.index].title
       : "98.4 FM") +
     "</span>" +
-    icon(radioActive ? "pause" : "play", 12) +
+    icon(radio.playing ? "pause" : "play", 12) +
     '</button><div class="footer-actions">' +
     btn("radio-menu", icon("music", 16) + "Playlist", "utility") +
     '<span class="footer-sep"></span>' +
@@ -343,6 +343,7 @@ function settingsDialog() {
     "settings",
     "Settings",
     line("Game sound", group("sound", binary, s.sound)) +
+      line("Bay FM music", group("music", binary, s.music)) +
       line("Spoken dispatch", group("voice", binary, s.voice)) +
       line(
         "Time of day",
@@ -376,7 +377,12 @@ function settingsDialog() {
 function changeSetting(k, v) {
   profile.settings[k] = v === "true" ? true : v === "false" ? false : v;
   audio.enabled = profile.settings.sound;
-  radio.muted = !profile.settings.sound;
+  if (k === "sound" || k === "music") {
+    if (!profile.settings.sound || !profile.settings.music) radio.pause();
+    else radio.startDrive(true);
+    if (!profile.settings.sound) audio.quiet();
+    else if (session && !session.paused) audio.start();
+  }
   persist();
   session?.graphics.resize();
   settingsDialog();
@@ -384,44 +390,30 @@ function changeSetting(k, v) {
 function refreshRadio() {
   const f = app.querySelector(".footer");
   if (f) f.outerHTML = footer();
-  const hud = app.querySelector('[data-act="radio-menu"].icon-button');
-  if (hud)
-    hud.title = radioActive
-      ? "Bay FM · " + tracks[songIndex].title
-      : "Bay FM radio";
+  const readout = app.querySelector("#station-readout");
+  if (readout) readout.textContent = stationLabel();
   if (dialog.open && dialogKind === "radio") renderRadio();
 }
-async function playSong(i) {
-  const index = (i + tracks.length) % tracks.length,
-    request = ++playRequest;
-  if (index !== songIndex) {
-    songIndex = index;
-    radio.src = tracks[index].src;
-  }
-  radio.muted = !profile.settings.sound;
-  try {
-    await radio.play();
-    if (request !== playRequest) return;
-    radioActive = true;
-    refreshRadio();
-  } catch (e) {
-    if (request !== playRequest) return;
-    radioActive = false;
-    refreshRadio();
-    notice("This recording could not play. Choose another track in Bay FM.");
-  }
+function stationLabel() {
+  return radio.playing
+    ? "Bay FM · " + tracks[radio.index].title
+    : "Bay FM · Off";
+}
+function tuneRadio(index) {
+  profile.settings.music = true;
+  persist();
+  if (profile.settings.sound) radio.play(index);
+  else notice("Enable Game sound in Settings to hear Bay FM.");
 }
 function toggleRadio() {
-  if (radioActive || !radio.paused) {
-    playRequest++;
+  if (radio.playing || radio.pending) {
+    profile.settings.music = false;
+    persist();
     radio.pause();
-    radioActive = false;
-    refreshRadio();
-  } else playSong(songIndex);
+  } else tuneRadio(radio.index);
 }
-radio.addEventListener("ended", () => playSong(songIndex + 1));
 function renderRadio() {
-  const t = tracks[songIndex];
+  const t = tracks[radio.index];
   openDialog(
     "radio",
     "Bay FM",
@@ -432,8 +424,8 @@ function renderRadio() {
       '</div><div class="transport">' +
       btn(
         "radio",
-        icon(radioActive ? "pause" : "play", 15) +
-          (radioActive ? "Pause" : "Play"),
+        icon(radio.playing ? "pause" : "play", 15) +
+          (radio.playing ? "Pause" : "Play"),
         "primary",
       ) +
       btn("radio-next", icon("skip", 16) + "Next") +
@@ -442,13 +434,13 @@ function renderRadio() {
         .map(
           (song, i) =>
             '<button class="song ' +
-            (i === songIndex ? "on" : "") +
+            (i === radio.index ? "on" : "") +
             '" data-act="track:' +
             i +
             '" aria-label="Play ' +
             song.title +
             '">' +
-            icon(i === songIndex && radioActive ? "radio" : "music", 19) +
+            icon(i === radio.index && radio.playing ? "radio" : "music", 19) +
             "<span><b>" +
             song.title +
             "</b><small>" +
@@ -964,7 +956,11 @@ function hudMarkup() {
     "</button>";
   return (
     '<div class="drive"><div id="viewport" class="viewport"></div><div class="hud"><div class="hud-top"><div class="hud-block"><div class="drive-status"><div class="eyebrow" id="race-type">Free roam</div><span id="world-time"></span></div><h2 id="race-name">Coastal Highway</h2><p id="race-progress"></p><p class="gps-readout" id="gps-readout"></p></div><div class="hud-ops">' +
-    iconBtn("radio-menu", "Bay FM radio", "radio") +
+    '<button class="hud-station" data-act="radio-menu" aria-label="Bay FM playlist">' +
+    icon("radio", 17) +
+    '<span id="station-readout">' +
+    stationLabel() +
+    "</span></button>" +
     iconBtn("map", "World map (M)", "map") +
     iconBtn("camera", "Change camera (C)", "camera") +
     iconBtn("pause", "Pause game", "pause") +
@@ -980,7 +976,8 @@ function hudMarkup() {
   );
 }
 let hudRefs = {},
-  miniDraw;
+  miniDraw,
+  getDirections;
 function updateHud(p, m, wp, near, district, daylight) {
   const h = hudRefs;
   if (!h.speed) return;
@@ -1023,9 +1020,10 @@ function updateHud(p, m, wp, near, district, daylight) {
   if (near)
     h["near-event"].textContent =
       "[ E ]  " + (near.landmark ? near.action : "Enter " + near.name);
-  if (wp) {
-    const distance = Math.hypot(p.x - wp.x, p.z - wp.z);
-    const bearing = Math.atan2(-(wp.x - p.x), -(wp.z - p.z));
+  const directions = wp ? getDirections(p, wp) : null;
+  if (wp && directions) {
+    const { distance, ahead } = directions;
+    const bearing = Math.atan2(-(ahead.x - p.x), -(ahead.z - p.z));
     const delta = Math.atan2(
       Math.sin(bearing - p.heading),
       Math.cos(bearing - p.heading),
@@ -1046,6 +1044,7 @@ function updateHud(p, m, wp, near, district, daylight) {
   miniDraw(h.mini, {
     player: p,
     waypoint: wp,
+    directions,
     local: true,
     scale: 0.35,
     events: activities,
@@ -1088,6 +1087,8 @@ function result(m, reward, rep) {
 }
 async function launch(event = null) {
   if (launchBusy) return;
+  audio.start();
+  radio.startDrive(profile.settings.music && profile.settings.sound);
   closeDialog(false);
   if (mapOverlay) closeMap();
   if (session) {
@@ -1107,11 +1108,12 @@ async function launch(event = null) {
     await new Promise((r) =>
       requestAnimationFrame(() => requestAnimationFrame(r)),
     );
-    const [{ Session }, { drawMap }] = await Promise.all([
+    const [{ Session }, { drawMap, roadDirections }] = await Promise.all([
       import("./session.js"),
       import("../ui/map.js"),
     ]);
     miniDraw = drawMap;
+    getDirections = roadDirections;
     session = new Session(
       document.querySelector("#viewport"),
       profile,
@@ -1326,10 +1328,10 @@ function action(name) {
       renderRadio();
       break;
     case "radio-next":
-      playSong(songIndex + 1);
+      tuneRadio(radio.index + 1);
       break;
     case "track":
-      playSong(Number(id));
+      tuneRadio(Number(id));
       break;
     case "radio":
       toggleRadio();

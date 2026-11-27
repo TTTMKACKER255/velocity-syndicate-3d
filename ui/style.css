@@ -1558,3 +1558,24 @@ dialog .primary {
 .dialog-line:has([data-act^="setting:timeOfDay"]) .segmented {
   flex-wrap: wrap;
 }
+
+.hud-ops .hud-station {
+  display: inline-flex;
+  align-items: center;
+  gap: .5rem;
+  padding: 0 .75rem;
+  min-height: 34px;
+  max-width: 240px;
+  border: 1px solid #9eb5a852;
+  border-radius: 3px;
+  font: 600 .85rem var(--body, sans-serif);
+}
+.hud-station svg { flex-shrink: 0; color: #b4d0ad; }
+#station-readout { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+@media (max-width: 690px) {
+  .hud-ops .hud-station { max-width: 112px; font-size: .72rem; padding: 0 .4rem; }
+}
+@media (max-width: 520px) {
+  .hud-ops .hud-station { max-width: 36px; justify-content: center; }
+  #station-readout { display: none; }
+}

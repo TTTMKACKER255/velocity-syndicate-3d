@@ -115,6 +115,7 @@ const defaults = () => ({
   parts: [],
   settings: {
     sound: true,
+    music: true,
     voice: false,
     quality: "Balanced",
     units: "km/h",

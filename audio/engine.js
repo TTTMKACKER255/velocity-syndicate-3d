@@ -1,7 +1,17 @@
+const impactFiles = {
+  car: new URL("./impacts/car.wav", import.meta.url).href,
+  tree: new URL("./impacts/tree.wav", import.meta.url).href,
+  concrete: new URL("./impacts/concrete.wav", import.meta.url).href,
+  glass: new URL("./impacts/glass.wav", import.meta.url).href,
+};
 // Engine harmonics follow the simulated tach. Audio is created after a user gesture.
 export class GameAudio {
   constructor() {
     this.enabled = true;
+    this.buffers = new Map();
+    this.voices = new Set();
+    this.effectTime = new Map();
+    this.generation = 0;
   }
   start() {
     if (!this.enabled) return;
@@ -9,6 +19,10 @@ export class GameAudio {
       if (!this.ctx) {
         const Audio = window.AudioContext || window.webkitAudioContext;
         this.ctx = new Audio();
+        this.effects = this.ctx.createDynamicsCompressor();
+        this.effects.threshold.value = -9;
+        this.effects.ratio.value = 5;
+        this.effects.connect(this.ctx.destination);
         this.master = this.ctx.createGain();
         this.master.gain.value = 0;
         this.master.connect(this.ctx.destination);
@@ -25,6 +39,8 @@ export class GameAudio {
         });
       }
       this.ctx.resume().catch(() => {});
+      for (const material of Object.keys(impactFiles))
+        this.loadImpact(material);
     } catch {
       /* Audio hardware is optional. */
     }
@@ -47,38 +63,74 @@ export class GameAudio {
       0.08,
     );
   }
-  impact(relativeSpeed, wood = false) {
-    if (!this.enabled || !this.ctx || this.ctx.state !== "running") return;
+  loadImpact(material) {
+    if (this.buffers.has(material)) return this.buffers.get(material);
+    const task = fetch(impactFiles[material])
+      .then((r) => {
+        if (!r.ok) throw new Error("Impact recording unavailable");
+        return r.arrayBuffer();
+      })
+      .then((bytes) => this.ctx.decodeAudioData(bytes))
+      .catch(() => {
+        this.buffers.delete(material);
+        return null;
+      });
+    this.buffers.set(material, task);
+    return task;
+  }
+  async impact(speed, material) {
+    if (
+      !this.enabled ||
+      !this.ctx ||
+      this.ctx.state !== "running" ||
+      speed < 1.1
+    )
+      return;
     const ctx = this.ctx,
+      contactTime = ctx.currentTime;
+    if (contactTime - (this.effectTime.get(material) ?? -10) < 0.2) return;
+    this.effectTime.set(material, contactTime);
+    const generation = this.generation,
+      lightWood = material === "wood";
+    const buffer = await this.loadImpact(lightWood ? "tree" : material);
+    if (
+      !buffer ||
+      generation !== this.generation ||
+      !this.enabled ||
+      ctx.currentTime - contactTime > 0.5
+    )
+      return;
+    const source = ctx.createBufferSource(),
+      gain = ctx.createGain(),
       t = ctx.currentTime;
-    if (!this.crunch) {
-      this.crunch = ctx.createBuffer(
-        1,
-        Math.ceil(ctx.sampleRate * 0.28),
-        ctx.sampleRate,
-      );
-      const samples = this.crunch.getChannelData(0);
-      for (let i = 0; i < samples.length; i++)
-        samples[i] = Math.random() * 2 - 1;
+    const intensity = Math.min(1, Math.sqrt(speed / 42));
+    source.buffer = buffer;
+    source.playbackRate.value =
+      material === "tree" ? 1 : 0.96 + Math.random() * 0.11 - 0.07 * intensity;
+    const volume = (lightWood ? 0.26 : 0.9) * (0.12 + 0.88 * intensity);
+    gain.gain.setValueAtTime(volume, t);
+    if (lightWood) {
+      gain.gain.setValueAtTime(volume, t + 0.085);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.2);
     }
-    const noise = ctx.createBufferSource(),
-      filter = ctx.createBiquadFilter(),
-      gain = ctx.createGain();
-    noise.buffer = this.crunch;
-    filter.type = "bandpass";
-    filter.frequency.setValueAtTime(wood ? 1450 : 780, t);
-    filter.frequency.exponentialRampToValueAtTime(wood ? 290 : 95, t + 0.18);
-    gain.gain.setValueAtTime(0.018 + Math.min(1, relativeSpeed / 35) * 0.19, t);
-    gain.gain.exponentialRampToValueAtTime(0.0002, t + 0.24);
-    noise.connect(filter).connect(gain).connect(ctx.destination);
-    noise.onended = () => {
-      noise.disconnect();
-      filter.disconnect();
+    source.connect(gain).connect(this.effects);
+    source.onended = () => {
+      this.voices.delete(source);
+      source.disconnect();
       gain.disconnect();
     };
-    noise.start(t);
+    if (this.voices.size >= 6) this.voices.values().next().value.stop();
+    this.voices.add(source);
+    source.start(t);
+    if (lightWood) source.stop(t + 0.21);
+  }
+  stopEffects() {
+    this.generation++;
+    for (const source of this.voices) source.stop();
+    this.voices.clear();
   }
   quiet() {
+    this.stopEffects();
     if (this.ctx)
       this.master.gain.setTargetAtTime(0, this.ctx.currentTime, 0.045);
     if ("speechSynthesis" in window) window.speechSynthesis.cancel();
