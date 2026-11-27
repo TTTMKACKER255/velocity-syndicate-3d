@@ -1,0 +1,1653 @@
+import { daylightAt } from "./daylight.js";
+import { drawLampPools, drawLampHead } from "./streetlights.js";
+// Perspective Canvas renderer for systems without WebGL2. The scene shares geometry,
+// instance transforms and map coordinates with the hardware renderer.
+import * as THREE from "three";
+import { queueArchitecture, paintArchitecture } from "./architecture.js";
+import { createVehicle } from "../models/vehicle.js";
+import { createWorld, groundHeight } from "./world.js";
+import { softwareAggregate } from "./road-materials.js";
+import { aggregateMetres } from "./road-materials-art.js";
+import { materialPlate } from "./environment-materials.js";
+import { drawTrafficSprite } from "../models/traffic-sprites.js";
+import { deformPanel, clearPanelDents } from "../models/damage.js";
+
+import { createSoftwarePlants } from "./vegetation-software.js";
+
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+const mod = (x, n) => ((x % n) + n) % n;
+const hex = (r, g, b) =>
+  Math.round(r) * 65536 + Math.round(g) * 256 + Math.round(b);
+const components = (c) => [c >> 16, (c >> 8) & 255, c & 255];
+const T = Math.PI * 2;
+function spriteCanvas(w, h) {
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  return canvas;
+}
+
+// A small, depth-buffered sprite cache preserves the actual car's curved coachwork,
+// carbon aero, rims and light geometry without resubmitting a 100k-triangle model each frame.
+function carSprites(look, dents = []) {
+  const model = createVehicle(look),
+    meshes = [];
+  if (dents.length) deformPanel(model.group, dents);
+  model.group.updateMatrixWorld(true);
+  const v = new THREE.Vector3(),
+    n = new THREE.Vector3(),
+    nm = new THREE.Matrix3();
+  model.group.traverseVisible((o) => {
+    if (!o.isMesh || o.material.opacity < 0.08 || o.material.name === "seat")
+      return;
+    const g = o.geometry,
+      src = g.attributes.position,
+      normals = g.attributes.normal,
+      xyz = new Float32Array(src.count * 3),
+      normal = new Float32Array(src.count * 3);
+    nm.getNormalMatrix(o.matrixWorld);
+    for (let i = 0; i < src.count; i++) {
+      v.fromBufferAttribute(src, i)
+        .applyMatrix4(o.matrixWorld)
+        .toArray(xyz, i * 3);
+      n.fromBufferAttribute(normals, i)
+        .applyMatrix3(nm)
+        .normalize()
+        .toArray(normal, i * 3);
+    }
+    meshes.push({
+      xyz,
+      normal,
+      indices:
+        g.index?.array || Uint32Array.from({ length: src.count }, (_, i) => i),
+      rgb: components(o.material.color.getHex()),
+      name: o.material.name,
+    });
+  });
+  clearPanelDents(model.group);
+  model.dispose();
+  const cache = new Map(),
+    W = 432,
+    H = 272,
+    scale = 75;
+  function render(az, el, night) {
+    const ka = mod(Math.round(az / (Math.PI / 24)), 48),
+      ke = clamp(Math.round(el / 0.09), -5, 13),
+      kn = Math.round(night * 2);
+    const key = ka + "/" + ke + "/" + kn;
+    if (cache.has(key)) return cache.get(key);
+    const a = (ka * Math.PI) / 24,
+      e = ke * 0.09,
+      sa = Math.sin(a),
+      ca = Math.cos(a),
+      se = Math.sin(e),
+      ce = Math.cos(e);
+    const cv = spriteCanvas(W, H),
+      ctx = cv.getContext("2d"),
+      im = ctx.createImageData(W, H);
+    const pixels = im.data,
+      depth = new Float32Array(W * H).fill(-Infinity),
+      nightLight = 1 - kn * 0.17;
+    for (const { xyz, normal, indices, rgb, name } of meshes) {
+      const vertices = new Float32Array(xyz.length),
+        tones = new Float32Array(xyz.length);
+      for (let i = 0; i < xyz.length; i += 3) {
+        const x = xyz[i],
+          y = xyz[i + 1] - 0.67,
+          z = xyz[i + 2],
+          cross = x * sa + z * ca;
+        vertices[i] = W / 2 + (x * ca - z * sa) * scale;
+        vertices[i + 1] = H / 2 - (y * ce - cross * se) * scale;
+        vertices[i + 2] = cross * ce + y * se;
+        const nx = normal[i],
+          ny = normal[i + 1],
+          nz = normal[i + 2],
+          sun = Math.max(0, -0.42 * nx + 0.82 * ny - 0.36 * nz);
+        const ndv = Math.max(0, nx * sa * ce + ny * se + nz * ca * ce);
+        const reflectionY = 2 * ndv * ny - se,
+          reflectionAz = Math.atan2(
+            2 * ndv * nx - sa * ce,
+            2 * ndv * nz - ca * ce,
+          );
+        const silhouette =
+          0.025 +
+          0.07 * Math.sin(reflectionAz * 7) +
+          0.04 * Math.sin(reflectionAz * 19);
+        const reflectsSky = clamp((reflectionY - silhouette) * 14 + 0.5, 0, 1);
+        const shine = Math.pow(
+          Math.max(0, -0.29 * nx + 0.76 * ny + 0.59 * nz),
+          29,
+        );
+        let lip = 0,
+          light = 0.56 + sun * 0.53 + Math.max(ny, 0) * 0.14;
+        if (name === "Coachwork") {
+          light =
+            0.4 + sun * 0.46 + Math.max(0, ny) * 0.23 + 0.24 * reflectsSky;
+          lip = 17 * (1 - ndv) ** 2 + 38 * shine;
+        } else if (name === "glass") {
+          light = 0.34 + reflectsSky * 0.44 + Math.max(0, reflectionY) * 0.5;
+          lip = 8 * (1 - ndv) + 7;
+        } else if (name === "red" || name === "light") {
+          light = 1.15 + kn * 0.1;
+          lip = 15 + kn * 10;
+        } else if (name === "rim" || name === "metal") {
+          light = 0.75 + sun * 0.48;
+          lip = 40 * shine;
+        }
+        for (let k = 0; k < 3; k++)
+          tones[i + k] = clamp(
+            (rgb[k] * light + lip + (name === "glass" ? k * 3 : 0)) *
+              nightLight,
+            0,
+            255,
+          );
+      }
+      for (let t = 0; t < indices.length; t += 3) {
+        const ai = indices[t] * 3,
+          bi = indices[t + 1] * 3,
+          ci = indices[t + 2] * 3;
+        const ax = vertices[ai],
+          ay = vertices[ai + 1],
+          bx = vertices[bi],
+          by = vertices[bi + 1],
+          cx = vertices[ci],
+          cy = vertices[ci + 1];
+        const area = (by - cy) * (ax - cx) + (cx - bx) * (ay - cy);
+        if (Math.abs(area) < 0.035) continue;
+        const minX = Math.max(0, Math.floor(Math.min(ax, bx, cx))),
+          maxX = Math.min(W - 1, Math.ceil(Math.max(ax, bx, cx)));
+        const minY = Math.max(0, Math.floor(Math.min(ay, by, cy))),
+          maxY = Math.min(H - 1, Math.ceil(Math.max(ay, by, cy)));
+        const az = vertices[ai + 2],
+          bz = vertices[bi + 2],
+          cz = vertices[ci + 2],
+          inv = 1 / area;
+        for (let py = minY; py <= maxY; py++)
+          for (let px = minX; px <= maxX; px++) {
+            const k = (by - cy) * (px + 0.5 - cx) + (cx - bx) * (py + 0.5 - cy),
+              u = k * inv;
+            if (u < 0 || u > 1) continue;
+            const vv =
+                ((cy - ay) * (px + 0.5 - cx) + (ax - cx) * (py + 0.5 - cy)) *
+                inv,
+              w = 1 - u - vv;
+            if (vv < 0 || w < 0) continue;
+            const zz = u * az + vv * bz + w * cz,
+              index = py * W + px;
+            if (zz <= depth[index]) continue;
+            depth[index] = zz;
+            let out = index * 4;
+            for (let c = 0; c < 3; c++)
+              pixels[out++] =
+                u * tones[ai + c] + vv * tones[bi + c] + w * tones[ci + c];
+            pixels[out] = 255;
+          }
+      }
+    }
+    ctx.putImageData(im, 0, 0);
+    if (cache.size >= 30) cache.delete(cache.keys().next().value);
+    cache.set(key, cv);
+    return cv;
+  }
+  return {
+    render,
+    scale,
+    clear() {
+      cache.clear();
+      meshes.length = 0;
+    },
+  };
+}
+
+function scenery(group) {
+  const data = { ground: [], strips: [], items: [], distance: [] },
+    m = new THREE.Matrix4(),
+    pos = new THREE.Vector3(),
+    quat = new THREE.Quaternion(),
+    scale = new THREE.Vector3(),
+    color = new THREE.Color();
+  const plane = (p, c, layer = 0) => {
+    const x = p.reduce((v, a) => v + a[0], 0) / p.length,
+      z = p.reduce((v, a) => v + a[2], 0) / p.length;
+    return { p, c, x, z, layer };
+  };
+  const bounds = (geometry) => {
+    geometry.computeBoundingBox();
+    return geometry.boundingBox;
+  };
+  // Downsample the terrain before painting. A finer second coast strip follows its beach.
+  const spacing = 64;
+  const vert = (x, z) => [x, Math.max(-0.55, groundHeight(x, z)), z];
+  for (let x = -1344; x < 448; x += spacing)
+    for (let z = -1280; z < 1152; z += spacing) {
+      const v = [
+        vert(x, z),
+        vert(x + spacing, z),
+        vert(x + spacing, z + spacing),
+        vert(x, z + spacing),
+      ];
+      const avg = v.reduce((sum, k) => sum + k[1], 0) * 0.25;
+      if (avg < -0.48) continue;
+      const y = groundHeight(x + 32, z + 32),
+        dry = avg < 2,
+        rock = y > 48;
+      const base = dry
+        ? [208, 191, 143]
+        : rock
+          ? [145, 140, 106]
+          : x > -340 && z > -655 && z < 545
+            ? [152, 153, 133]
+            : [113, 138, 88];
+      const light = clamp(
+        (v[0][1] - v[2][1]) * 0.24 + 1.5 * Math.sin(x * 0.034 + z * 0.021),
+        -9,
+        9,
+      );
+      const tile = plane(v, hex(...base.map((q) => q + light)));
+      if (!dry && !(x > -245 && x < 322 && z < -645 && z > -1055)) {
+        tile.uv = v.map((p) => [p[0] / 4.5, p[2] / 4.5]);
+        tile.grass = true;
+      }
+      data.ground.push(tile);
+    }
+  const solids = group.children.filter((o) => o.isMesh && !o.isInstancedMesh);
+  for (const [i, o] of solids.entries()) {
+    if (
+      !o.geometry.attributes.position ||
+      i === 0 ||
+      o.material.isShaderMaterial
+    )
+      continue;
+    const source = o.geometry.attributes.position,
+      cols = o.geometry.attributes.color;
+    if (o.material.map?.image && o.geometry.type === "PlaneGeometry") {
+      data.items.push({
+        kind: "sign",
+        x: o.position.x,
+        y: o.position.y,
+        z: o.position.z,
+        a: o.rotation.y,
+        w: o.geometry.parameters.width,
+        h: o.geometry.parameters.height,
+        img: o.material.map.image,
+      });
+      continue;
+    }
+    if (!cols || source.count % 4 !== 0) continue;
+    for (let k = 0; k < source.count; k += 4) {
+      const v = Array.from({ length: 4 }, (_, j) => [
+        source.getX(k + j),
+        source.getY(k + j),
+        source.getZ(k + j),
+      ]);
+      color.fromBufferAttribute(cols, k);
+      const element = plane(
+        v,
+        color.getHex(),
+        o.name === "Forecourt paving"
+          ? 1
+          : i === 4
+            ? 3
+            : i === 3
+              ? 1
+              : i === 2
+                ? 2
+                : 4,
+      );
+      const asphalt = o.name === "Wet asphalt",
+        paint = o.name === "Road markings",
+        works = o.name === "Road service details";
+      if (
+        asphalt ||
+        o.name === "Stone paving" ||
+        o.name === "Forecourt paving" ||
+        paint ||
+        works
+      ) {
+        const uv = o.geometry.attributes.uv;
+        element.tex = asphalt
+          ? "asphalt"
+          : paint
+            ? color.b < 0.6
+              ? "roadOchre"
+              : "roadIvory"
+            : works
+              ? "roadWorks"
+              : "pavement";
+        element.uv = Array.from({ length: 4 }, (_, j) => [
+          uv.getX(k + j),
+          1 - uv.getY(k + j),
+        ]);
+        if (asphalt) {
+          element.chipAcross = o.geometry.attributes.uv1.getX(k + 1);
+          const dx = v[1][0] - v[0][0],
+            dz = v[1][2] - v[0][2],
+            span = Math.hypot(dx, dz) || 1;
+          element.surfaceRight = [dx / span, dz / span];
+          element.wear = color.r;
+          element.c = hex(
+            73 * Math.sqrt(color.r),
+            75 * Math.sqrt(color.g),
+            76 * Math.sqrt(color.b),
+          );
+        }
+        if (paint || works) {
+          element.decal = true;
+          element.layer = works ? 2.5 : 3;
+          element.c = works ? 0x393939 : color.b < 0.6 ? 0xd5aa58 : 0xd9d7c7;
+        }
+      }
+      if (i === 1) data.distance.push(element);
+      else data.strips.push(element);
+    }
+  }
+  for (const o of group.children.filter((n) => n.isInstancedMesh)) {
+    const type = o.geometry.type;
+    for (let j = 0; j < o.count; j++) {
+      if (o.material.userData.foliage || o.userData.trees?.has(j)) continue;
+      o.getMatrixAt(j, m);
+      m.decompose(pos, quat, scale);
+      o.getColorAt(j, color);
+      const x = pos.x,
+        y = pos.y,
+        z = pos.z,
+        w = scale.x,
+        h = scale.y,
+        d = scale.z,
+        c = color.getHex();
+      if (type === "BoxGeometry") {
+        if (Math.max(w, d) < 0.2 || (Math.min(w, d) < 0.11 && h < 5)) continue;
+        const a = Math.atan2(m.elements[8], m.elements[10]);
+        data.items.push({
+          kind: "block",
+          x,
+          y,
+          z,
+          w,
+          h,
+          d,
+          a,
+          c,
+          facade: Boolean(o.material.userData.plate),
+          plate: o.material.userData.plate,
+          shop: o.material.userData.store,
+          source: o,
+          id: j,
+        });
+      } else if (type === "CylinderGeometry") {
+        const E = m.elements;
+        data.items.push({
+          kind: "beam",
+          x,
+          y,
+          z,
+          v: [
+            [x - E[4] / 2, y - E[5] / 2, z - E[6] / 2],
+            [x + E[4] / 2, y + E[5] / 2, z + E[6] / 2],
+          ],
+          r: w,
+          c,
+          source: o,
+          id: j,
+        });
+      } else if (type === "IcosahedronGeometry") {
+        data.items.push({ kind: "bush", x, y, z, w, h, d, c });
+      } else if (type === "BufferGeometry") {
+        const bb = bounds(o.geometry);
+        data.items.push({
+          kind: "palm",
+          x,
+          y,
+          z,
+          h: 10.8 * h,
+          w: (bb.max.x - bb.min.x) * w,
+          c,
+          seed: j,
+        });
+      }
+    }
+  }
+  for (const l of group.userData.streetlamps || [])
+    data.items.push({ kind: "lampGlow", lamp: l, x: l.x, y: l.y, z: l.z });
+  for (const tree of group.userData.trees || [])
+    data.items.push({
+      kind: tree.kind === "palm" ? "palm" : "tree",
+      x: tree.x,
+      y: tree.y,
+      z: tree.z,
+      h: tree.visualHeight,
+      seed: Math.floor(tree.x + tree.z),
+      tree,
+    });
+  return data;
+}
+
+export function createSoftwareView(canvas, look = {}, worldGroup) {
+  let ownWorld;
+  if (!worldGroup) {
+    ownWorld = createWorld(new THREE.Scene());
+    worldGroup = ownWorld.group;
+  }
+  const map = scenery(worldGroup),
+    ctx = canvas.getContext("2d", { alpha: false });
+  const plants = createSoftwarePlants(ctx);
+  const plantView = () => ({ eye, ahead, right, up, w, h, f });
+  let car = carSprites(look),
+    dentList = null;
+  const plateCache = new Map();
+  // Resolve textures once per lighting band. The paint loop reuses patterns and mip-sized images.
+  function appearance(name, shade = 1, d = 0) {
+    const plate = materialPlate(name);
+    if (!plate.image) return null;
+    const dim = clamp(Math.round((1 - shade * (1 - night * 0.66)) * 6), 0, 5);
+    const level = d > 330 ? 2 : d > 105 ? 1 : 0,
+      key = name + "/" + dim + "/" + level;
+    if (plateCache.has(key)) return plateCache.get(key);
+    const src = plate.image,
+      img = spriteCanvas(
+        Math.max(20, Math.round(src.width / 2 ** level)),
+        Math.max(20, Math.round(src.height / 2 ** level)),
+      );
+    const c = img.getContext("2d");
+    c.drawImage(src, 0, 0, img.width, img.height);
+    if (dim) {
+      c.globalCompositeOperation = "source-atop";
+      c.fillStyle = "rgba(12,20,33," + dim / 7 + ")";
+      c.fillRect(0, 0, img.width, img.height);
+    }
+    const entry = {
+      image: img,
+      pattern: ctx.createPattern(img, "repeat"),
+      plate,
+      key,
+    };
+    plateCache.set(key, entry);
+    return entry;
+  }
+  const sampleAggregate = softwareAggregate(appearance);
+  const clouds = spriteCanvas(768, 160),
+    cc = clouds.getContext("2d"),
+    ci = cc.createImageData(768, 160);
+  const hash = (x, y) =>
+    mod(Math.sin(mod(x, 32) * 19.232 + y * 73.321) * 4851.32, 1);
+  function noise(x, y, period) {
+    x = mod(x, period);
+    const ix = Math.floor(x),
+      iy = Math.floor(y);
+    let u = x - ix,
+      v = y - iy;
+    u = u * u * (3 - 2 * u);
+    v = v * v * (3 - 2 * v);
+    const a = hash(ix, iy) * (1 - u) + hash(mod(ix + 1, period), iy) * u,
+      b = hash(ix, iy + 1) * (1 - u) + hash(mod(ix + 1, period), iy + 1) * u;
+    return a * (1 - v) + b * v;
+  }
+  for (let y = 0; y < 160; y++)
+    for (let x = 0; x < 768; x++) {
+      const u = x / 768,
+        v = y / 160,
+        n =
+          0.55 * noise(u * 4, v * 3, 4) +
+          0.28 * noise(u * 8, v * 6, 8) +
+          0.13 * noise(u * 16, v * 12, 16) +
+          0.04 * noise(u * 32, v * 24, 32);
+      const a = clamp((n - 0.45) * 4.0, 0, 0.83) * Math.sin(v * Math.PI) ** 0.6,
+        idx = (y * 768 + x) * 4;
+      ci.data.set([247, 245, 226, Math.round(a * 150)], idx);
+    }
+  cc.putImageData(ci, 0, 0);
+  const eye = { x: 0, y: 0, z: 0 },
+    ahead = { x: 0, y: 0, z: -1 },
+    right = { x: 1, z: 0 },
+    up = { x: 0, y: 1, z: 0 };
+  let w = 1,
+    h = 1,
+    f = 1,
+    night = 0,
+    solar = daylightAt(11),
+    fog = [199, 209, 196],
+    clock = 0,
+    previousHeading = 0,
+    previousTime = -1;
+  const near = 0.32,
+    far = 1180;
+  function cameraSpace(v) {
+    const x = v[0] - eye.x,
+      y = v[1] - eye.y,
+      z = v[2] - eye.z;
+    return [
+      x * right.x + z * right.z,
+      x * up.x + y * up.y + z * up.z,
+      x * ahead.x + y * ahead.y + z * ahead.z,
+    ];
+  }
+  function projection(v) {
+    return [w * 0.5 + (f * v[0]) / v[2], h * 0.5 - (f * v[1]) / v[2]];
+  }
+  function projected(x, y, z) {
+    const v = cameraSpace([x, y, z]);
+    return v[2] > near ? projection(v) : null;
+  }
+  function depth(x, y, z) {
+    return (
+      (x - eye.x) * ahead.x + (y - eye.y) * ahead.y + (z - eye.z) * ahead.z
+    );
+  }
+  function visible(x, z, r = 30, max = far) {
+    const dx = x - eye.x,
+      dz = z - eye.z,
+      forward = dx * ahead.x + dz * ahead.z;
+    return (
+      forward > -r &&
+      forward < max + r &&
+      Math.abs(dx * right.x + dz * right.z) <
+        Math.max(0, forward) * ((w / f) * 0.55 + 0.15) + r
+    );
+  }
+  function tint(c, distance, shade = 1, glow = 0) {
+    const mist = clamp((distance - 65) / 1150, 0, 0.8),
+      r = c >> 16,
+      g = (c >> 8) & 255,
+      b = c & 255;
+    const level = (1 - night * 0.68 + glow * night * 0.63) * shade;
+    return (
+      "rgb(" +
+      [r, g, b]
+        .map((k, i) =>
+          Math.round(
+            clamp(
+              k *
+                level *
+                (i === 0
+                  ? 1 + solar.warmth * 0.11
+                  : i === 2
+                    ? 1 - solar.warmth * 0.17
+                    : 1) *
+                (1 - mist) +
+                fog[i] * mist,
+              0,
+              255,
+            ),
+          ),
+        )
+        .join(",") +
+      ")"
+    );
+  }
+  function screenPoly(pts, fill) {
+    if (pts.length < 3) return;
+    ctx.beginPath();
+    ctx.moveTo(pts[0][0], pts[0][1]);
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+    ctx.closePath();
+    ctx.fillStyle = fill;
+    ctx.fill();
+  }
+  function poly(vertices, fill, asphaltStrip = false) {
+    let p = vertices.map(cameraSpace),
+      min = p[0][2],
+      max = min;
+    for (let k = 1; k < p.length; k++) {
+      min = Math.min(min, p[k][2]);
+      max = Math.max(max, p[k][2]);
+    }
+    if (max < near) return;
+    if (min < near) {
+      const clipped = [];
+      for (let k = 0; k < p.length; k++) {
+        const a = p[k],
+          b = p[(k + 1) % p.length];
+        if (a[2] >= near) clipped.push(a);
+        if (a[2] >= near !== b[2] >= near) {
+          const t = (near - a[2]) / (b[2] - a[2]);
+          clipped.push([
+            a[0] + (b[0] - a[0]) * t,
+            a[1] + (b[1] - a[1]) * t,
+            near,
+          ]);
+        }
+      }
+      p = clipped;
+    }
+    if (p.length > 2) {
+      screenPoly(p.map(projection), fill);
+      if (asphaltStrip) {
+        ctx.strokeStyle = fill;
+        ctx.lineWidth = 0.8;
+        ctx.stroke();
+      }
+    }
+  }
+  function texturedQuad(world, uv, entry, refine = 1) {
+    if (!entry?.pattern) return;
+    const image = entry.image;
+    const pts = world.map((v, i) => [...cameraSpace(v), uv[i][0], uv[i][1]]);
+    function interpolate(a, b, t) {
+      return a.map((v, i) => v + (b[i] - v) * t);
+    }
+    function triangle(a, b, c) {
+      const pa = projection(a),
+        pb = projection(b),
+        pc = projection(c);
+      if (
+        Math.max(pa[0], pb[0], pc[0]) < 0 ||
+        Math.max(pa[1], pb[1], pc[1]) < 0 ||
+        Math.min(pa[0], pb[0], pc[0]) > w ||
+        Math.min(pa[1], pb[1], pc[1]) > h
+      )
+        return;
+      const dx1 = pb[0] - pa[0],
+        dy1 = pb[1] - pa[1],
+        dx2 = pc[0] - pa[0],
+        dy2 = pc[1] - pa[1];
+      const u = a[3] * image.width,
+        v = a[4] * image.height;
+      const u1 = (b[3] - a[3]) * image.width,
+        v1 = (b[4] - a[4]) * image.height,
+        u2 = (c[3] - a[3]) * image.width,
+        v2 = (c[4] - a[4]) * image.height;
+      const det = u1 * v2 - u2 * v1;
+      if (Math.abs(det) < 1e-6) return;
+      const xx = (dx1 * v2 - dx2 * v1) / det,
+        yx = (dy1 * v2 - dy2 * v1) / det,
+        xy = (dx2 * u1 - dx1 * u2) / det,
+        yy = (dy2 * u1 - dy1 * u2) / det;
+      ctx.setTransform(
+        xx,
+        yx,
+        xy,
+        yy,
+        pa[0] - xx * u - xy * v,
+        pa[1] - yx * u - yy * v,
+      );
+      ctx.beginPath();
+      ctx.moveTo(u, v);
+      ctx.lineTo(u + u1, v + v1);
+      ctx.lineTo(u + u2, v + v2);
+      ctx.closePath();
+      ctx.fillStyle = entry.pattern;
+      ctx.fill();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+    }
+    function draw(q) {
+      const clipped = [];
+      for (let i = 0; i < q.length; i++) {
+        const a = q[i],
+          b = q[(i + 1) % q.length],
+          ina = a[2] > 1.0,
+          inb = b[2] > 1.0;
+        if (ina) clipped.push(a);
+        if (ina !== inb)
+          clipped.push(interpolate(a, b, (1 - a[2]) / (b[2] - a[2])));
+      }
+      for (let k = 1; k < clipped.length - 1; k++)
+        triangle(clipped[0], clipped[k], clipped[k + 1]);
+    }
+    // Split along the axis with the greatest change in perspective.
+    const along =
+      Math.abs(pts[0][2] - pts[1][2]) > Math.abs(pts[0][2] - pts[3][2]);
+    const [a, b, c, d] = along ? pts : [pts[0], pts[3], pts[2], pts[1]];
+    for (let k = 0; k < refine; k++) {
+      const i = k / refine,
+        j = (k + 1) / refine;
+      draw([
+        interpolate(a, b, i),
+        interpolate(a, b, j),
+        interpolate(d, c, j),
+        interpolate(d, c, i),
+      ]);
+    }
+  }
+  // Raster the near ground in one transparent pass. Interpolating u/z and v/z across
+  // scanlines keeps the asphalt grain stationary and removes affine seams at the bumper.
+  const groundCanvas = spriteCanvas(1, 1),
+    groundCtx = groundCanvas.getContext("2d");
+  let groundImage,
+    groundPixels,
+    groundScale = 1;
+  function beginGround() {
+    const tw = Math.max(1, Math.min(680, w)),
+      th = Math.max(1, Math.round((h * tw) / w));
+    if (groundCanvas.width !== tw || groundCanvas.height !== th) {
+      groundCanvas.width = tw;
+      groundCanvas.height = th;
+      groundImage = groundCtx.createImageData(tw, th);
+      groundPixels = new Uint32Array(groundImage.data.buffer);
+    } else if (!groundImage) {
+      groundImage = groundCtx.createImageData(tw, th);
+      groundPixels = new Uint32Array(groundImage.data.buffer);
+    }
+    groundPixels.fill(0);
+    groundScale = tw / w;
+  }
+  function groundTriangle(A, B, C, entry, chip, across, wear) {
+    let rows = [A, B, C].sort((a, b) => a[1] - b[1]);
+    const [a, b, c] = rows;
+    if (c[1] < 0 || a[1] >= groundCanvas.height) return;
+    const det = (b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1]);
+    if (Math.abs(det) < 0.08) return;
+    const pixels = entry.pixels,
+      srcW = entry.image.width,
+      srcH = entry.image.height;
+    const dx = [],
+      dy = [];
+    for (let k = 2; k < 5; k++) {
+      dx[k] =
+        ((b[k] - a[k]) * (c[1] - a[1]) - (c[k] - a[k]) * (b[1] - a[1])) / det;
+      dy[k] =
+        ((b[0] - a[0]) * (c[k] - a[k]) - (c[0] - a[0]) * (b[k] - a[k])) / det;
+    }
+    const first = Math.max(0, Math.ceil(a[1] - 0.5)),
+      end = Math.min(groundCanvas.height - 1, Math.floor(c[1] - 0.5));
+    const long = (c[0] - a[0]) / (c[1] - a[1] || 1),
+      top = (b[0] - a[0]) / (b[1] - a[1] || 1),
+      bottom = (c[0] - b[0]) / (c[1] - b[1] || 1);
+    for (let yy = first; yy <= end; yy++) {
+      const ry = yy + 0.5 - a[1],
+        left = a[0] + ry * long,
+        right =
+          yy + 0.5 < b[1] ? a[0] + ry * top : b[0] + (yy + 0.5 - b[1]) * bottom;
+      const x0 = Math.max(0, Math.ceil(Math.min(left, right) - 0.5)),
+        x1 = Math.min(
+          groundCanvas.width - 1,
+          Math.floor(Math.max(left, right) - 0.5),
+        );
+      const rx = x0 + 0.5 - a[0];
+      let q = a[2] + dx[2] * rx + dy[2] * ry,
+        u = a[3] + dx[3] * rx + dy[3] * ry,
+        v = a[4] + dx[4] * rx + dy[4] * ry,
+        write = yy * groundCanvas.width + x0;
+      for (let x = x0; x <= x1; x++, write++) {
+        const z = 1 / q,
+          pu = u * z,
+          pv = v * z;
+        const tx = ((pu - Math.floor(pu)) * srcW) | 0,
+          ty = ((pv - Math.floor(pv)) * srcH) | 0;
+        const base = pixels[ty * srcW + tx];
+        if (chip && z < 27) {
+          const cu = pu * across,
+            cv = (pv - 1) * (55 / aggregateMetres);
+          const cx = ((cu - Math.floor(cu)) * chip.size) | 0;
+          const cy = ((cv - Math.floor(cv)) * chip.size) | 0;
+          const fleck = chip.values[cy * chip.size + cx];
+          const k =
+            (wear - 1) * 27 + fleck * (0.85 - z * 0.025) * (1 - night * 0.72);
+          const r = clamp((base & 255) + k, 0, 255),
+            g = clamp(((base >>> 8) & 255) + k, 0, 255);
+          const b = clamp(((base >>> 16) & 255) + k, 0, 255);
+          groundPixels[write] = (255 << 24) | (b << 16) | (g << 8) | r;
+        } else groundPixels[write] = base;
+        q += dx[2];
+        u += dx[3];
+        v += dx[4];
+      }
+    }
+  }
+  function groundQuad(o, entry) {
+    if (!entry) return;
+    const samplePixels = (m) => {
+      if (m && !m.pixels)
+        m.pixels = new Uint32Array(
+          m.image
+            .getContext("2d")
+            .getImageData(0, 0, m.image.width, m.image.height).data.buffer,
+        );
+      return m;
+    };
+    samplePixels(entry);
+    const chip =
+      o.chipAcross && visible(o.x, o.z, 18, 33)
+        ? sampleAggregate(o.surfaceRight, solar)
+        : null;
+    const pts = o.p.map((v, i) => [...cameraSpace(v), ...o.uv[i]]),
+      clipped = [];
+    for (let i = 0; i < 4; i++) {
+      const a = pts[i],
+        b = pts[(i + 1) % 4],
+        ia = a[2] > near,
+        ib = b[2] > near;
+      if (ia) clipped.push(a);
+      if (ia !== ib) {
+        const t = (near - a[2]) / (b[2] - a[2]);
+        clipped.push(a.map((v, k) => v + (b[k] - v) * t));
+      }
+    }
+    const screen = clipped.map((v) => {
+      const [x, y] = projection(v),
+        q = 1 / v[2];
+      return [x * groundScale, y * groundScale, q, v[3] * q, v[4] * q];
+    });
+    for (let k = 1; k < screen.length - 1; k++)
+      groundTriangle(
+        screen[0],
+        screen[k],
+        screen[k + 1],
+        entry,
+        chip,
+        o.chipAcross,
+        o.wear,
+      );
+  }
+  const wallCache = new Map();
+  function drawFacade(face, entry, across, tall, d) {
+    const base = entry.image,
+      key =
+        entry.plate.width +
+        "-" +
+        entry.plate.height +
+        "-" +
+        base.width +
+        "-" +
+        across +
+        "-" +
+        tall +
+        "-" +
+        Math.round(night * 4) +
+        "-" +
+        entry.key;
+    let wall = wallCache.get(key);
+    if (!wall) {
+      const width = Math.min(600, base.width * across),
+        height = Math.min(640, base.height * tall);
+      wall = spriteCanvas(width, height);
+      const wc = wall.getContext("2d");
+      for (let j = 0; j < tall; j++)
+        for (let i = 0; i < across; i++)
+          wc.drawImage(
+            base,
+            (i * width) / across,
+            (j * height) / tall,
+            width / across + 0.5,
+            height / tall + 0.5,
+          );
+      if (wallCache.size > 75) wallCache.delete(wallCache.keys().next().value);
+      wallCache.set(key, wall);
+    }
+    const q = face.map(cameraSpace);
+    if (q.some((v) => v[2] < 1.5)) {
+      texturedQuad(
+        face,
+        [
+          [0, 0],
+          [across, 0],
+          [across, tall],
+          [0, tall],
+        ],
+        entry,
+        6,
+      );
+      return;
+    }
+    const interpolate = (a, b, t) => a.map((v, i) => v + (b[i] - v) * t);
+    const steps = d < 42 ? 4 : d < 125 ? 2 : 1;
+    function clipTriangle(a, b, c) {
+      ctx.beginPath();
+      ctx.moveTo(a[0], a[1]);
+      ctx.lineTo(b[0], b[1]);
+      ctx.lineTo(c[0], c[1]);
+      ctx.closePath();
+      ctx.clip();
+    }
+    for (let k = 0; k < steps; k++) {
+      const t = k / steps,
+        n = (k + 1) / steps,
+        tl = projection(interpolate(q[0], q[1], t)),
+        tr = projection(interpolate(q[0], q[1], n)),
+        bl = projection(interpolate(q[3], q[2], t)),
+        br = projection(interpolate(q[3], q[2], n));
+      if (
+        Math.max(tl[0], tr[0], bl[0], br[0]) < 0 ||
+        Math.min(tl[0], tr[0], bl[0], br[0]) > w
+      )
+        continue;
+      const sw = wall.width / steps,
+        sh = wall.height;
+      ctx.save();
+      clipTriangle(tl, tr, bl);
+      ctx.setTransform(
+        (tr[0] - tl[0]) / sw,
+        (tr[1] - tl[1]) / sw,
+        (bl[0] - tl[0]) / sh,
+        (bl[1] - tl[1]) / sh,
+        tl[0],
+        tl[1],
+      );
+      ctx.drawImage(wall, t * wall.width, 0, sw, sh, 0, 0, sw, sh);
+      ctx.restore();
+      ctx.save();
+      clipTriangle(br, bl, tr);
+      ctx.setTransform(
+        (br[0] - bl[0]) / sw,
+        (br[1] - bl[1]) / sw,
+        (br[0] - tr[0]) / sh,
+        (br[1] - tr[1]) / sh,
+        bl[0] + tr[0] - br[0],
+        bl[1] + tr[1] - br[1],
+      );
+      ctx.drawImage(wall, t * wall.width, 0, sw, sh, 0, 0, sw, sh);
+      ctx.restore();
+    }
+  }
+  function line(a, b, fill, width) {
+    const u = projected(...a),
+      v = projected(...b);
+    if (!u || !v) return;
+    ctx.beginPath();
+    ctx.moveTo(...u);
+    ctx.lineTo(...v);
+    ctx.strokeStyle = fill;
+    ctx.lineWidth = width;
+    ctx.stroke();
+  }
+  function block(o, distance) {
+    const { x, y, z, w: sx, h: sy, d: sz, a, c } = o,
+      co = Math.cos(a),
+      si = Math.sin(a);
+    const corners = [
+      [-1, -1],
+      [1, -1],
+      [1, 1],
+      [-1, 1],
+    ].map(([i, j]) => [
+      x + co * sx * 0.5 * i + si * sz * 0.5 * j,
+      z - si * sx * 0.5 * i + co * sz * 0.5 * j,
+    ]);
+    const lower = corners.map(([x, z]) => [x, y - sy * 0.5, z]),
+      upper = corners.map(([x, z]) => [x, y + sy * 0.5, z]);
+    for (let i = 0; i < 4; i++) {
+      const j = (i + 1) % 4,
+        dx = corners[j][0] - corners[i][0],
+        dz = corners[j][1] - corners[i][1];
+      if ((eye.x - corners[i][0]) * dz - (eye.z - corners[i][1]) * dx < 0)
+        continue;
+      const length = Math.hypot(dx, dz) || 1;
+      const lit = Math.max(
+        0,
+        (dz * solar.direction[0] - dx * solar.direction[2]) / length,
+      );
+      const shade = 0.86 + 0.3 * lit * (1 - night);
+      poly(
+        [lower[i], lower[j], upper[j], upper[i]],
+        tint(c, distance, shade, o.glow),
+      );
+      if (o.plate && distance < 650) {
+        const entry = appearance(o.plate, Math.min(1, shade), distance);
+        if (entry) {
+          const across = Math.max(
+            1,
+            Math.round(Math.hypot(dx, dz) / entry.plate.width),
+          );
+          const tall = o.shop
+            ? 1
+            : Math.max(1, Math.round(sy / entry.plate.height));
+          const face = [upper[i], upper[j], lower[j], lower[i]];
+          drawFacade(face, entry, across, tall, distance);
+          if (night > 0.45 && !o.shop && distance < 195) {
+            const floors = Math.max(1, Math.floor(sy / 3.6));
+            const wallPoint = (u, v) => [
+              corners[i][0] + dx * u,
+              y - sy * 0.5 + sy * v,
+              corners[i][1] + dz * u,
+            ];
+            const count = clamp(Math.round(Math.hypot(dx, dz) / 3), 1, 32);
+            for (let k = 1; k < floors; k += 3) {
+              const start = ((k * 7 + i * 13) % count) / count;
+              line(
+                wallPoint(start, (k + 0.5) / floors),
+                wallPoint(
+                  Math.min(1, start + 0.56 / count),
+                  (k + 0.5) / floors,
+                ),
+                "rgba(255,206,138," + 0.72 * night + ")",
+                Math.max(0.7, (0.58 * f) / Math.max(5, distance)),
+              );
+            }
+          }
+        }
+      }
+    }
+    if (eye.y > y + sy * 0.5) poly(upper, tint(c, distance, 1.11, o.glow));
+  }
+  function item(o, dist) {
+    if (o.kind === "lampGlow") {
+      drawLampHead(
+        ctx,
+        o.lamp,
+        solar.lamps,
+        projected,
+        f / Math.max(near, dist),
+      );
+      return;
+    }
+    if (o.source && o.source.instanceMatrix.array[o.id * 16 + 13] < -100)
+      return;
+    if (o.kind === "block") {
+      block(o, dist);
+      return;
+    }
+    if (o.kind === "beam") {
+      const width = (f * o.r) / Math.max(near, dist);
+      if (width > 0.45)
+        line(o.v[0], o.v[1], tint(o.c, dist), clamp(width, 0.56, 70));
+      return;
+    }
+    if (o.tree) {
+      plants.drawTree(
+        o.tree,
+        plantView(),
+        dist,
+        clock,
+        night,
+        typeof solar === "undefined" ? null : solar,
+      );
+      return;
+    }
+    if (o.kind === "sign") {
+      const co = Math.cos(o.a),
+        si = Math.sin(o.a),
+        point = (dx, dy) => projected(o.x + dx * co, o.y + dy, o.z - dx * si);
+      const ul = point(-o.w / 2, o.h / 2),
+        ur = point(o.w / 2, o.h / 2),
+        bl = point(-o.w / 2, -o.h / 2);
+      if (!ul || !ur || !bl) return;
+      ctx.save();
+      ctx.transform(
+        (ur[0] - ul[0]) / o.img.width,
+        (ur[1] - ul[1]) / o.img.width,
+        (bl[0] - ul[0]) / o.img.height,
+        (bl[1] - ul[1]) / o.img.height,
+        ...ul,
+      );
+      ctx.drawImage(o.img, 0, 0);
+      ctx.restore();
+      return;
+    }
+    if (o.kind === "bush") {
+      const pp = projected(o.x, o.y, o.z);
+      if (!pp) return;
+      const scale = f / Math.max(near, dist),
+        ww = Math.max(o.w, o.d) * scale,
+        hh = o.h * scale;
+      ctx.fillStyle = tint(o.c, dist);
+      ctx.beginPath();
+      ctx.ellipse(...pp, Math.max(0.4, ww), Math.max(0.4, hh), -0.12, 0, T);
+      ctx.fill();
+    }
+  }
+
+  function drawSky() {
+    const horizon = clamp(
+      h * 0.5 + (f * ahead.y) / Math.max(0.1, Math.hypot(ahead.x, ahead.z)),
+      -h * 0.4,
+      h * 1.4,
+    );
+    const color = (day, dusk) => {
+      const a = components(day),
+        b = components(dusk);
+      return (
+        "rgb(" +
+        a.map((v, i) => Math.round(v * (1 - night) + b[i] * night)).join(",") +
+        ")"
+      );
+    };
+    const sky = ctx.createLinearGradient(
+      0,
+      Math.min(0, horizon - 2),
+      0,
+      Math.max(2, horizon),
+    );
+    const css = (rgb) => "rgb(" + rgb.map(Math.round).join(",") + ")";
+    sky.addColorStop(0, css(solar.sky));
+    sky.addColorStop(
+      0.62,
+      css(solar.sky.map((c, i) => c * 0.62 + solar.horizon[i] * 0.38)),
+    );
+    sky.addColorStop(1, css(solar.horizon));
+    ctx.fillStyle = sky;
+    ctx.fillRect(0, 0, w, h);
+    if (night < 0.98) {
+      const span = w * 1.45,
+        xx = -mod(
+          (Math.atan2(ahead.x, -ahead.z) * span) / T - clock * 0.58,
+          span,
+        ),
+        hh = h * 0.43;
+      ctx.globalAlpha = 0.82 - night * 0.72;
+      for (let cx = xx; cx < w; cx += span)
+        ctx.drawImage(clouds, cx, horizon - hh * 0.93, span, hh);
+      ctx.globalAlpha = 1;
+    }
+    const [sx, sy, sz] = solar.direction;
+    const sun = projected(
+      eye.x + sx * 2300,
+      eye.y + sy * 2300,
+      eye.z + sz * 2300,
+    );
+    if (sun && sy > -0.045 && sun[0] > -w * 0.4 && sun[0] < w * 1.4) {
+      const radius = h * (0.13 + 0.08 * solar.golden),
+        rgb = solar.sunColor.map(Math.round).join(",");
+      const g = ctx.createRadialGradient(...sun, 0, ...sun, radius);
+      g.addColorStop(0, "rgba(255,247,213,.98)");
+      g.addColorStop(0.055, "rgba(255,235,186,.98)");
+      g.addColorStop(0.075, "rgba(" + rgb + ",.64)");
+      g.addColorStop(0.32, "rgba(" + rgb + ",.2)");
+      g.addColorStop(1, "rgba(" + rgb + ",0)");
+      ctx.fillStyle = g;
+      ctx.fillRect(sun[0] - radius, sun[1] - radius, radius * 2, radius * 2);
+    }
+    if (night > 0.55) {
+      ctx.fillStyle = "rgba(217,231,242," + (night - 0.55) * 1.55 + ")";
+      for (let i = 0; i < 50; i++) {
+        const x = mod(i * 197.83 + Math.atan2(ahead.x, ahead.z) * w * 0.45, w),
+          y = (Math.sin(i * 73.36) * 0.5 + 0.5) * Math.max(0, horizon - 16);
+        ctx.fillRect(x, y, i % 6 === 0 ? 1.6 : 1, 1.35);
+      }
+    }
+    if (horizon < h) {
+      const sea = ctx.createLinearGradient(0, horizon, 0, h);
+      sea.addColorStop(
+        0,
+        css(solar.haze.map((c, i) => c * (i === 0 ? 0.75 : 0.85))),
+      );
+      sea.addColorStop(0.13, color(0x6ea7ae, 0x2b4859));
+      sea.addColorStop(1, color(0x347d83, 0x173744));
+      ctx.fillStyle = sea;
+      ctx.fillRect(0, horizon, w, h - horizon);
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = color(0xb0cccc, 0x425d68);
+      ctx.beginPath();
+      for (let k = 1; k < 28; k++) {
+        const u = (k / 29) ** 2,
+          y = horizon + u * (h - horizon),
+          span = (0.025 + u * 0.12) * w;
+        const x = mod(
+          k * 133.43 +
+            Math.sin(clock * 0.4 + k) * 9 +
+            eye.x * 0.12 +
+            ahead.x * 237,
+          w,
+        );
+        ctx.moveTo(x, y);
+        ctx.lineTo(x + span, y);
+      }
+      ctx.stroke();
+    }
+  }
+  function setCamera(p, index, t, mission) {
+    const dt = previousTime < 0 ? 1 / 30 : clamp(t - previousTime, 0, 0.12),
+      nearCam = index === 1 || index === 2;
+    const targetYaw = nearCam ? p.heading : (p.travel ?? p.heading);
+    if (previousTime < 0 || dt === 0) previousHeading = targetYaw;
+    else
+      previousHeading +=
+        Math.atan2(
+          Math.sin(targetYaw - previousHeading),
+          Math.cos(targetYaw - previousHeading),
+        ) *
+        (1 - Math.exp(-dt * (nearCam ? 22 : 7)));
+    previousTime = t;
+    const s = Math.sin(previousHeading),
+      c = Math.cos(previousHeading),
+      dist = [7.3 + Math.abs(p.speed || 0) * 0.02, -0.6, -2.18, 9.6][index];
+    const side = index === 3 ? 5.1 * Math.sin(t * 0.21 + 1.1) : 0;
+    eye.x = p.x + s * dist + c * side;
+    eye.z = p.z + c * dist - s * side;
+    eye.y = Math.max(
+      p.y + [3.05, 1.18, 0.57, 2.3][index],
+      groundHeight(eye.x, eye.z) + 0.44,
+    );
+    const forward = nearCam ? 18 : index === 3 ? 1.1 : 4.6;
+    let tx = p.x - s * forward,
+      tz = p.z - c * forward,
+      ty = p.y + (nearCam ? 1.04 + Math.sin(p.pitch || 0) * forward : 0.96);
+    if (mission?.status === "intro") {
+      const a = p.heading + 0.55 + mission.intro * 0.6;
+      eye.x = p.x + Math.sin(a) * 6;
+      eye.z = p.z + Math.cos(a) * 6;
+      eye.y = p.y + 1.9 + mission.intro * 0.22;
+      tx = p.x;
+      tz = p.z;
+      ty = p.y + 0.78;
+    }
+    const len = Math.hypot(tx - eye.x, ty - eye.y, tz - eye.z);
+    ahead.x = (tx - eye.x) / len;
+    ahead.y = (ty - eye.y) / len;
+    ahead.z = (tz - eye.z) / len;
+    const horiz = Math.hypot(ahead.x, ahead.z) || 1;
+    right.x = -ahead.z / horiz;
+    right.z = ahead.x / horiz;
+    up.x = (-ahead.x * ahead.y) / horiz;
+    up.z = (-ahead.z * ahead.y) / horiz;
+    up.y = horiz;
+    const fov =
+      (nearCam ? 70 : 53) +
+      Math.abs(p.speed || 0) * 0.085 +
+      (p.boostStage || 0) * 2.2;
+    f = h / (2 * Math.tan((fov * Math.PI) / 360));
+  }
+  function trafficCar(o, dist, id) {
+    if (drawTrafficSprite(ctx, o, eye, projected, f, dist, night)) return;
+    const p = o.position,
+      y = p.y ?? groundHeight(p.x, p.z),
+      a = o.rotation?.y || 0;
+    let c = [0x786c59, 0x7794a1, 0xb4b6a4, 0x943e32, 0x3a666d][id % 5];
+    if (o.children?.[0]?.material?.color)
+      c = o.children[0].material.color.getHex();
+    block(
+      { x: p.x, y: y + 0.55, z: p.z, w: 1.9, h: 0.65, d: 4.18, a, c },
+      dist,
+    );
+    block(
+      {
+        x: p.x,
+        y: y + 1.05,
+        z: p.z,
+        w: 1.57,
+        h: 0.49,
+        d: 2.08,
+        a,
+        c: 0x384952,
+      },
+      dist,
+    );
+    block(
+      { x: p.x, y: y + 1.32, z: p.z, w: 1.58, h: 0.075, d: 1.7, a, c },
+      dist,
+    );
+    const ss = Math.sin(a),
+      cc = Math.cos(a);
+    for (const sign of [-1, 1])
+      for (const k of [-1, 1]) {
+        const x = p.x + cc * k * 0.67 + ss * 2.11 * sign,
+          z = p.z - ss * k * 0.67 + cc * 2.11 * sign;
+        block(
+          {
+            x,
+            y: y + 0.63,
+            z,
+            w: 0.43,
+            h: 0.11,
+            d: 0.075,
+            a,
+            c: sign > 0 ? 0xf05d45 : 0xf4dfb1,
+          },
+          dist,
+        );
+      }
+  }
+  function drawCar(p, index, mission) {
+    if ((index === 1 || index === 2) && mission?.status !== "intro") {
+      if (index === 1) {
+        const hood = ctx.createLinearGradient(0, h * 0.88, 0, h);
+        hood.addColorStop(0, tint(0xe3e6e4, 0));
+        hood.addColorStop(
+          0.22,
+          tint(parseInt((look.paint || "#bfc4c9").slice(1), 16), 0),
+        );
+        hood.addColorStop(1, tint(0x535b60, 0));
+        ctx.fillStyle = hood;
+        ctx.beginPath();
+        ctx.moveTo(w * 0.14, h);
+        ctx.bezierCurveTo(w * 0.24, h * 0.91, w * 0.66, h * 0.91, w * 0.86, h);
+        ctx.fill();
+      }
+      return;
+    }
+    const co = Math.cos(p.heading),
+      si = Math.sin(p.heading),
+      dx = eye.x - p.x,
+      dz = eye.z - p.z;
+    const az = Math.atan2(dx * co - dz * si, dx * si + dz * co),
+      el = Math.atan2(eye.y - p.y - 0.67, Math.hypot(dx, dz));
+    const center = projected(p.x, p.y + 0.67, p.z),
+      dd = depth(p.x, p.y + 0.67, p.z);
+    if (!center || dd < 1) return;
+    const pix = (f / dd) * 1.08,
+      gr = groundHeight(p.x, p.z);
+    const shadow = Array.from({ length: 22 }, (_, i) => {
+      const a = (T * i) / 22,
+        x = 1.12 * Math.cos(a),
+        z = 2.35 * Math.sin(a);
+      return [
+        p.x + co * x + si * z,
+        Math.min(p.y + 0.02, Math.max(gr + 0.3, p.y - (p.airborne ? 4 : 0))),
+        p.z - si * x + co * z,
+      ];
+    });
+    poly(shadow, "rgba(20,25,24,.35)");
+    const img = car.render(az, el, night),
+      cw = (img.width * pix) / car.scale,
+      ch = (img.height * pix) / car.scale;
+    if (look.underglow) {
+      const g = ctx.createRadialGradient(
+        center[0],
+        center[1] + pix * 0.35,
+        0,
+        center[0],
+        center[1] + pix * 0.35,
+        pix * 1.6,
+      );
+      g.addColorStop(0, "rgba(70,211,222,.4)");
+      g.addColorStop(1, "rgba(70,211,222,0)");
+      ctx.fillStyle = g;
+      ctx.fillRect(
+        center[0] - pix * 1.6,
+        center[1] - pix * 0.9,
+        pix * 3.2,
+        pix * 2.5,
+      );
+    }
+    ctx.save();
+    ctx.translate(...center);
+    ctx.rotate(-(p.roll || 0) * Math.cos(az));
+    ctx.drawImage(img, -cw / 2, -ch / 2, cw, ch);
+    ctx.restore();
+    if (p.boosting) {
+      for (const side of [-1, 1]) {
+        const pt = projected(
+          p.x + side * 0.64 * co + 2.12 * si,
+          p.y + 0.34,
+          p.z - side * 0.64 * si + 2.12 * co,
+        );
+        if (!pt) continue;
+        const sz = pix * (0.18 + 0.045 * Math.sin(clock * 52 + side)),
+          g = ctx.createRadialGradient(...pt, 0, ...pt, sz * 1.8);
+        g.addColorStop(0, "#fff6d3");
+        g.addColorStop(0.27, p.boostStage > 1 ? "#9cc3ff" : "#ffa65a");
+        g.addColorStop(1, "rgba(180,100,255,0)");
+        ctx.fillStyle = g;
+        ctx.fillRect(pt[0] - sz * 2, pt[1] - sz * 2, sz * 4, sz * 4);
+      }
+    }
+  }
+  function gate(waypoint) {
+    const { x, z, heading = 0 } = waypoint,
+      y = waypoint.height ?? groundHeight(x, z),
+      co = Math.cos(heading),
+      si = Math.sin(heading);
+    if (!visible(x, z, 16, 750)) return;
+    const d = depth(x, y, z),
+      px = clamp((f / Math.max(d, 1)) * 0.17, 1.1, 8);
+    const left = [x - co * 8, y, z + si * 8],
+      right = [x + co * 8, y, z - si * 8];
+    const l = [left[0], y + 6.9, left[2]],
+      r = [right[0], y + 6.9, right[2]];
+    line(left, l, "#ff9a55", px);
+    line(l, r, "#ffc77e", px);
+    line(right, r, "#ff9a55", px);
+    const pt = projected(x, y + 8.8 + Math.sin(clock * 2) * 0.24, z);
+    if (pt) {
+      const a = clamp((f / Math.max(d, 1)) * 0.83, 2, 27);
+      screenPoly(
+        [
+          [pt[0], pt[1] - a],
+          [pt[0] + a * 0.72, pt[1]],
+          [pt[0], pt[1] + a],
+          [pt[0] - a * 0.72, pt[1]],
+        ],
+        "#ffab67",
+      );
+    }
+  }
+  function render(
+    p,
+    index = 0,
+    t = 0,
+    nightness = 0,
+    waypoint = null,
+    traffic = [],
+    mission = null,
+    parts = [],
+    overlays = null,
+    daylight = null,
+  ) {
+    const dents = p.dents || null;
+    if (dents !== dentList) {
+      car.clear();
+      car = carSprites(look, dents || []);
+      dentList = dents;
+    }
+    w = canvas.width || 1;
+    h = canvas.height || 1;
+    clock = t;
+    night = clamp(nightness, 0, 1);
+    solar = daylight || daylightAt(11 + night * 11);
+    fog = solar.haze;
+    setCamera(p, index, t, mission);
+    drawSky();
+    const drawTerrain = (array, range, margin, sortedByLayer = false) => {
+      const list = [];
+      for (const o of array) {
+        if (!visible(o.x, o.z, margin, range)) continue;
+        const d = depth(o.x, o.p[0][1], o.z);
+        if ((o.layer === 3 && d > 390) || (o.layer === 2.5 && d > 75)) continue;
+        list.push({ o, d });
+      }
+      list.sort(
+        (a, b) => (sortedByLayer ? a.o.layer - b.o.layer : 0) || b.d - a.d,
+      );
+      if (!sortedByLayer) {
+        for (const { o, d } of list) poly(o.p, tint(o.c, d));
+        return;
+      }
+      beginGround();
+      let painted = false;
+      function compositeGround() {
+        if (painted) {
+          groundCtx.putImageData(groundImage, 0, 0);
+          ctx.drawImage(groundCanvas, 0, 0, w, h);
+        }
+        painted = false;
+      }
+      for (const { o, d } of list) {
+        if (o.layer > 2 && painted) compositeGround();
+        if (o.decal) {
+          const surface =
+            d < (o.layer === 3 ? 36 : 65)
+              ? appearance(o.tex, 1, d > 25 ? 160 : 0)
+              : null;
+          if (surface) texturedQuad(o.p, o.uv, surface, d < 14 ? 5 : 2);
+          else if (o.layer === 3) poly(o.p, tint(o.c, d));
+          continue;
+        }
+        poly(o.p, tint(o.c, d), o.layer === 2);
+        if (o.tex && d < 145) {
+          const entry = appearance(o.tex, 1, d > 65 ? 350 : d > 26 ? 160 : 0);
+          groundQuad(o, entry);
+          painted = true;
+        }
+      }
+      compositeGround();
+    };
+    drawTerrain(map.distance, 4100, 220);
+    drawTerrain(map.ground, 1200, 93);
+    beginGround();
+    for (const tile of map.ground) {
+      if (!tile.grass || !visible(tile.x, tile.z, 52, 95)) continue;
+      const d = depth(tile.x, tile.p[0][1], tile.z);
+      const tex = appearance("meadow", 1, d > 52 ? 350 : d > 22 ? 160 : 0);
+      if (tex) groundQuad(tile, tex);
+    }
+    groundCtx.putImageData(groundImage, 0, 0);
+    ctx.drawImage(groundCanvas, 0, 0, w, h);
+    drawTerrain(map.strips, 720, 24, true);
+    plants.drawGroundcover(
+      worldGroup.userData.vegetation,
+      plantView(),
+      clock,
+      night,
+    );
+    overlays?.marks?.drawSoftware(poly, p);
+    drawLampPools(
+      ctx,
+      worldGroup.userData.streetlamps || [],
+      solar.lamps,
+      visible,
+      projected,
+    );
+    const visibleItems = [];
+    // A sloping chase camera sees only a few floors of the closest towers.
+    // Test the actual bounds against the four side planes before sorting parts.
+    const clipPlanes = [];
+    for (const sign of [-1, 1]) {
+      const sx = w / (2 * f),
+        sy = h / (2 * f);
+      clipPlanes.push([
+        sx * ahead.x + sign * right.x,
+        sx * ahead.y,
+        sx * ahead.z + sign * right.z,
+      ]);
+      clipPlanes.push([
+        sy * ahead.x + sign * up.x,
+        sy * ahead.y + sign * up.y,
+        sy * ahead.z + sign * up.z,
+      ]);
+    }
+    function inView(x, y, z, width, height, span) {
+      const dx = x - eye.x,
+        dy = y - eye.y,
+        dz = z - eye.z;
+      for (const [a, b, c] of clipPlanes) {
+        if (
+          a * dx + b * dy + c * dz <
+          -0.5 *
+            (Math.abs(a) * width + Math.abs(b) * height + Math.abs(c) * span)
+        )
+          return false;
+      }
+      return true;
+    }
+    const interiorView = {
+      inView,
+      visible,
+      depth,
+      time: clock,
+      ctx,
+      block,
+      poly,
+      projected,
+      tint,
+      line,
+      f,
+      night,
+    };
+    queueArchitecture(visibleItems, worldGroup.userData.rooms, interiorView);
+    for (const o of map.items) {
+      const radius =
+        o.kind === "block"
+          ? Math.max(o.w, o.d) * 0.7 + 3
+          : o.kind === "beam"
+            ? 12
+            : 8;
+      if (!visible(o.x, o.z, radius, o.kind === "block" ? 1000 : 540)) continue;
+      const d = depth(o.x, o.y, o.z);
+      if (
+        o.kind === "block" &&
+        d > 135 &&
+        (Math.max(o.w, o.h, o.d) * f) / d < 2
+      )
+        continue;
+      if (
+        o.kind === "palm" &&
+        !o.tree?.fallen &&
+        d > 1 &&
+        d < 132 &&
+        night < 0.8
+      ) {
+        const length = o.h / Math.max(0.26, solar.direction[1]),
+          sx = -solar.direction[0] * length,
+          sz = -solar.direction[2] * length,
+          sy = groundHeight(o.x + sx, o.z + sz) + 0.32;
+        const a = [o.x, o.y + 0.28, o.z],
+          b = [o.x + sx, sy, o.z + sz],
+          shade = "rgba(31,40,32," + 0.19 * (1 - night) + ")";
+        line(a, b, shade, clamp((0.33 * f) / d, 0.6, 9));
+        const sh = projected(...b);
+        if (sh)
+          for (let i = 0; i < 7; i++) {
+            const ang = i * 2.399 + o.seed,
+              cx = b[0] + Math.cos(ang) * 3.7,
+              cz = b[2] + Math.sin(ang) * 3.7;
+            poly(
+              [
+                b,
+                [
+                  b[0] + Math.cos(ang) * 2 - Math.sin(ang) * 0.4,
+                  sy,
+                  b[2] + Math.sin(ang) * 2 + Math.cos(ang) * 0.4,
+                ],
+                [cx, groundHeight(cx, cz) + 0.32, cz],
+              ],
+              shade,
+            );
+          }
+      }
+      visibleItems.push({ o, d });
+    }
+    traffic.forEach(({ mesh }, id) => {
+      if (
+        mesh &&
+        mesh.visible !== false &&
+        visible(mesh.position.x, mesh.position.z, 3, 550)
+      )
+        visibleItems.push({
+          mesh,
+          id,
+          d: depth(mesh.position.x, mesh.position.y, mesh.position.z),
+        });
+    });
+    if (waypoint)
+      visibleItems.push({
+        gate: true,
+        d: depth(waypoint.x, groundHeight(waypoint.x, waypoint.z), waypoint.z),
+      });
+    for (const entry of parts) {
+      const m = entry.mesh || entry;
+      if (
+        m.visible !== false &&
+        m.position &&
+        visible(m.position.x, m.position.z, 3, 245)
+      )
+        visibleItems.push({
+          part: m,
+          d: depth(m.position.x, m.position.y, m.position.z),
+        });
+    }
+    visibleItems.sort((a, b) => b.d - a.d);
+    for (const el of visibleItems) {
+      if (el.interior) paintArchitecture(el.interior, el.d, interiorView);
+      else if (el.o) item(el.o, el.d);
+      else if (el.mesh) trafficCar(el.mesh, el.d, el.id);
+      else if (el.gate) gate(waypoint);
+      else if (el.part) {
+        const pp = el.part.position,
+          q = projected(pp.x, pp.y, pp.z);
+        if (!q) continue;
+        const s = clamp((f / Math.max(1, el.d)) * 0.59, 2, 42);
+        ctx.strokeStyle = "#ffd189";
+        ctx.lineWidth = Math.max(1, s * 0.26);
+        ctx.beginPath();
+        ctx.ellipse(
+          ...q,
+          s * (0.46 + 0.46 * Math.abs(Math.sin(clock))),
+          s,
+          clock * 0.4,
+          0,
+          T,
+        );
+        ctx.stroke();
+      }
+    }
+    overlays?.beacons?.drawSoftware(ctx, projected, depth, { f, w, h }, p);
+    drawCar(p, index, mission);
+  }
+  return {
+    render,
+    dispose() {
+      car.clear();
+      plateCache.clear();
+      wallCache.clear();
+      ownWorld?.dispose();
+    },
+  };
+}
