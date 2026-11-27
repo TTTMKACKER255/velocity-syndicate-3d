@@ -1,0 +1,14 @@
+{
+  "name": "velocity-syndicate-3d",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "An open-world driving game set in Aurelia Bay",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node --test scripts/*.test.mjs",
+    "dev": "vite --host 0.0.0.0"
+  },
+  "dependencies": { "three": "0.180.0", "@fontsource/barlow-condensed": "5.2.8", "@fontsource/barlow": "5.2.8" },
+  "devDependencies": { "vite": "7.2.2" }
+}
