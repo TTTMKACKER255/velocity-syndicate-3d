@@ -471,7 +471,8 @@ function createScenery(root,night) {
       const x=s.x+Math.cos(s.heading)*offset,z=s.z-Math.sin(s.heading)*offset;
       return [x,groundHeight(x,z)+deckHeight(d)+dy,z];
     }
-    if(deckHeight(station)<.45)continue;
+    // Leave the merging lanes open where the elevated road meets street level.
+    if(deckHeight(station)<2.1)continue;
     const l=half+.65;
     for(const sign of [-1,1]) {
       const a=side(p,station,sign*l,1.36),b=side(q,end,sign*l,1.36);
