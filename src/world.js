@@ -1,5 +1,6 @@
 // All horizontal distances are metres. Heading zero points north (-Z).
 import * as THREE from "three";
+import { architectureMaterial, textureFor } from "./environment-materials.js";
 
 const clamp = (value, low, high) => Math.min(high, Math.max(low, value));
 function smooth(a, b, value) {
@@ -560,6 +561,8 @@ function routeStrip(builder, p, q, left, right, height, color) {
 }
 function makeRoads(root) {
   const asphalt = stripBuilder(),
+    roadUV = [],
+    pavingUV = [],
     stone = stripBuilder(),
     lines = stripBuilder();
   const black = new THREE.Color("#45484a"),
@@ -582,6 +585,10 @@ function makeRoads(root) {
         q = endpoint(d + step),
         mid = endpoint(d + step * 0.5);
       routeStrip(asphalt, p, q, -half, half, h, black);
+      const nextD = Math.min(length, d + step),
+        v0 = d / 55,
+        v1 = nextD / 55;
+      roadUV.push(0, v0, 1, v0, 1, v1, 0, v1);
       if (mid.elevation < 1 && roadAt(mid.x, mid.z, 1, i, true)) continue;
       const walk = i === expressway ? 0.65 : i === 1 || i === 11 ? 1.3 : 2.6;
       for (const s of [-1, 1]) {
@@ -591,7 +598,7 @@ function makeRoads(root) {
           q,
           s * half,
           s * (half + walk),
-          h + 0.06,
+          h + 0.14,
           i === 1 || i === 11 ? shoulder : sidewalk,
         );
         routeStrip(
@@ -603,6 +610,58 @@ function makeRoads(root) {
           h + 0.024,
           white,
         );
+        pavingUV.push(
+          0,
+          d / 6.4,
+          walk / 6.4,
+          d / 6.4,
+          walk / 6.4,
+          nextD / 6.4,
+          0,
+          nextD / 6.4,
+        );
+        if (i !== 1 && i !== 11) {
+          // A kerb stone has its own top bevel and raised face.
+          const edge = (r, t, y) => {
+            const x = r.x + Math.cos(r.heading) * t,
+              z = r.z - Math.sin(r.heading) * t;
+            return [x, groundHeight(x, z) + (r.elevation || 0) + y, z];
+          };
+          const outside = s * (half + 0.19),
+            inside = s * (half - 0.035);
+          stone.quad(
+            edge(p, inside, h + 0.035),
+            edge(q, inside, h + 0.035),
+            edge(q, s * half, h + 0.16),
+            edge(p, s * half, h + 0.16),
+            new THREE.Color("#8b897e"),
+          );
+          stone.quad(
+            edge(p, s * half, h + 0.16),
+            edge(q, s * half, h + 0.16),
+            edge(q, outside, h + 0.14),
+            edge(p, outside, h + 0.14),
+            new THREE.Color("#d5d1c2"),
+          );
+          pavingUV.push(
+            0,
+            d / 6.4,
+            0,
+            nextD / 6.4,
+            0.05,
+            nextD / 6.4,
+            0.05,
+            d / 6.4,
+            0,
+            d / 6.4,
+            0,
+            nextD / 6.4,
+            0.05,
+            nextD / 6.4,
+            0.05,
+            d / 6.4,
+          );
+        }
         if (rd.width >= 18 && Math.floor(d / step) % 3 === 0)
           routeStrip(
             lines,
@@ -618,7 +677,12 @@ function makeRoads(root) {
       routeStrip(lines, p, q, 0.075, 0.21, h + 0.03, yellow);
     }
   });
-  const roadMat = geometricMaterial({ roughness: 0.56, metalness: 0.16 });
+  const roadMat = geometricMaterial({
+    map: textureFor("asphalt"),
+    vertexColors: false,
+    roughness: 0.69,
+    metalness: 0.12,
+  });
   roadMat.onBeforeCompile = (shader) => {
     shader.vertexShader = "varying vec3 roadWorld;\n" + shader.vertexShader;
     shader.vertexShader = shader.vertexShader.replace(
@@ -641,56 +705,25 @@ function makeRoads(root) {
       "#include <roughnessmap_fragment>\nroughnessFactor=mix(roughnessFactor,.13,wetPatch*.85);",
     );
   };
-  const roadMesh = new THREE.Mesh(asphalt.finish(), roadMat);
+  const roadGeo = asphalt.finish();
+  roadGeo.setAttribute("uv", new THREE.Float32BufferAttribute(roadUV, 2));
+  const roadMesh = new THREE.Mesh(roadGeo, roadMat);
   roadMesh.name = "Wet asphalt";
   roadMesh.receiveShadow = true;
   root.add(roadMesh);
-  root.add(new THREE.Mesh(stone.finish(), geometricMaterial()));
+  const paving = stone.finish();
+  paving.setAttribute("uv", new THREE.Float32BufferAttribute(pavingUV, 2));
+  const pavement = new THREE.Mesh(
+    paving,
+    geometricMaterial({
+      map: textureFor("pavement"),
+      vertexColors: false,
+      roughness: 0.86,
+    }),
+  );
+  pavement.name = "Stone paving";
+  root.add(pavement);
   root.add(new THREE.Mesh(lines.finish(), geometricMaterial()));
-}
-
-function glassMaterial(night) {
-  const mat = new THREE.MeshStandardMaterial({
-    color: 0xffffff,
-    roughness: 0.31,
-    metalness: 0.23,
-  });
-  mat.onBeforeCompile = (s) => {
-    s.uniforms.bayNight = night;
-    s.vertexShader =
-      "varying vec3 facadePos; varying vec3 facadeNormal; varying vec3 facadeWorld;\n" +
-      s.vertexShader;
-    s.vertexShader = s.vertexShader.replace(
-      "#include <begin_vertex>",
-      `#include <begin_vertex>
-      vec3 scaleM=vec3(length(instanceMatrix[0].xyz),length(instanceMatrix[1].xyz),length(instanceMatrix[2].xyz));
-      facadePos=(position+vec3(.5))*scaleM;
-      facadeNormal=normal; facadeWorld=(modelMatrix*instanceMatrix*vec4(position,1.)).xyz;`,
-    );
-    s.fragmentShader =
-      "varying vec3 facadePos; varying vec3 facadeNormal; varying vec3 facadeWorld; uniform float bayNight;\n" +
-      s.fragmentShader;
-    s.fragmentShader = s.fragmentShader.replace(
-      "#include <color_fragment>",
-      `#include <color_fragment>
-      vec2 pane=vec2(abs(facadeNormal.x)>.5 ? facadePos.z : facadePos.x,facadePos.y)/vec2(2.45,3.6);
-      vec2 grid=abs(fract(pane+.5)-.5);
-      vec2 aa=clamp(fwidth(pane),vec2(.009),vec2(.45));
-      float glass=smoothstep(.038-aa.x,.038+aa.x,grid.x)*smoothstep(.067-aa.y,.067+aa.y,grid.y);
-      float unit=fract(sin(dot(floor(pane),vec2(19.31,12.73)))*741.3);
-      float reflected=.5+.5*sin(facadeWorld.x*.012+facadeWorld.z*.017+facadeWorld.y*.027);
-      vec3 glazing=diffuseColor.rgb*(.8+unit*.18)+vec3(.05,.09,.12)*reflected;
-      float lamp=smoothstep(.76,.83,unit)*bayNight;
-      diffuseColor.rgb=mix(diffuseColor.rgb*.47+.028,mix(glazing,vec3(.92,.70,.38),lamp),glass*(1.-abs(facadeNormal.y)));
-    `,
-    );
-    s.fragmentShader = s.fragmentShader.replace(
-      "#include <emissivemap_fragment>",
-      `#include <emissivemap_fragment>
-       totalEmissiveRadiance+=vec3(.38,.24,.09)*glass*lamp*(1.-abs(facadeNormal.y));`,
-    );
-  };
-  return mat;
 }
 
 const rotation = new THREE.Euler(),
@@ -884,8 +917,22 @@ function createScenery(root, night) {
   const rng = randomSource(671041),
     batches = makeBatches(root);
   const box = new THREE.BoxGeometry(),
-    blocks = batches.create(box),
-    facade = batches.create(box.clone(), glassMaterial(night), true);
+    blocks = batches.create(box);
+  const buildings = Object.fromEntries(
+    [
+      "glass",
+      "residence",
+      "brick",
+      "limestone",
+      "cafe",
+      "workshop",
+      "lobby",
+      "depot",
+    ].map((name) => [
+      name,
+      batches.create(box.clone(), architectureMaterial(name, night), true),
+    ]),
+  );
   const posts = batches.create(new THREE.CylinderGeometry(0.5, 0.5, 1, 7));
   const boulder = batches.create(
     new THREE.IcosahedronGeometry(1, 0),
@@ -898,8 +945,48 @@ function createScenery(root, night) {
   );
   const palms = batches.create(palmGeometry(), geometricMaterial(), true);
   const fence = batches.create(box.clone());
+  const foliage = {};
+  for (const kind of ["palm", "oak"]) {
+    const mat = new THREE.MeshStandardMaterial({
+      map: textureFor(kind),
+      alphaTest: 0.35,
+      side: THREE.DoubleSide,
+      roughness: 1,
+    });
+    mat.userData.foliage = true;
+    const geometry = new THREE.PlaneGeometry(kind === "palm" ? 0.75 : 1.2, 1);
+    geometry.translate(0, 0.5, 0);
+    foliage[kind] = batches.create(geometry, mat, true);
+  }
   const collisions = new Map(),
-    ramps = [];
+    ramps = [],
+    forest = [],
+    falling = [];
+  let simulationTime = 0;
+  const garageRoad = routePoint(0, 78),
+    homeRoad = routePoint(9, 872);
+  const frontage = [
+    {
+      name: "Bayline Garage",
+      x: garageRoad.x - 26,
+      z: garageRoad.z,
+      w: 12,
+      d: 27,
+      h: 4.9,
+      base: "workshop",
+      upper: null,
+    },
+    {
+      name: "Promenade Home",
+      x: homeRoad.x - 19,
+      z: homeRoad.z,
+      w: 11,
+      d: 17,
+      h: 3.8,
+      base: "lobby",
+      upper: "residence",
+    },
+  ];
   function solid(
     x,
     z,
@@ -910,20 +997,57 @@ function createScenery(root, night) {
     smash = null,
   ) {
     const record = { x, z, rx, rz, y, h, smash };
+    const pad = smash?.tree ? 2.52 : 2;
     indexBounds(
       collisions,
-      x - rx - 2,
-      x + rx + 2,
-      z - rz - 2,
-      z + rz + 2,
+      x - rx - pad,
+      x + rx + pad,
+      z - rz - pad,
+      z + rz + pad,
       record,
     );
   }
   function palm(x, z, h = 1, rotation = rng() * 6.28) {
     const y = groundHeight(x, z);
     if (y < 1) return;
-    palms.add(transform(x, y, z, h, h, h, rotation));
-    solid(x, z, 0.25 * h, 0.25 * h, y, 10 * h);
+    const id = palms.add(transform(x, y, z, h, h, h, rotation));
+    treeRecord("palm", x, y, z, 10.8 * h, [[palms, id]], 0.34 * h);
+  }
+  function treeRecord(kind, x, y, z, height, parts, radius) {
+    const tree = {
+      kind,
+      x,
+      y,
+      z,
+      height,
+      parts,
+      fallen: false,
+      progress: 0,
+      angle: 0,
+      dx: 0,
+      dz: 0,
+      started: 0,
+    };
+    // The intersecting cutouts carry individual leaves, while the 3D trunk and crown carry volume.
+    const cardHeight = kind === "palm" ? height * 1.27 : height;
+    for (let i = 0; i < 2; i++) {
+      const index = foliage[kind].add(
+        transform(
+          x,
+          y,
+          z,
+          cardHeight,
+          cardHeight,
+          cardHeight,
+          Math.PI * 0.5 * i + Math.sin(x + z),
+        ),
+      );
+      tree.parts.push([foliage[kind], index]);
+    }
+    tree.visualHeight = cardHeight;
+    forest.push(tree);
+    solid(x, z, radius, radius, y, height, { tree });
+    return tree;
   }
   const stone = ["#b5b5a9", "#a99b8b", "#cec8b4", "#b7aa95"];
   const glass = [
@@ -944,6 +1068,14 @@ function createScenery(root, night) {
         d = 20 + rng() * 15;
       if (shoreDepth(cx, cz) < 37 || roadAt(cx, cz, 16)) continue;
       if (
+        frontage.some(
+          (v) =>
+            Math.abs(cx - v.x) < (v.w + w) * 0.5 + 1.5 &&
+            Math.abs(cz - v.z) < (v.d + d) * 0.5 + 1.5,
+        )
+      )
+        continue;
+      if (
         [
           [-1, -1],
           [-1, 1],
@@ -959,20 +1091,55 @@ function createScenery(root, night) {
       const h = 6 + Math.pow(rng(), 1.5) * 16 + central * (23 + rng() * 83);
       const tone = stone[Math.floor(rng() * stone.length)],
         glaze = glass[Math.floor(rng() * glass.length)];
-      const podium = Math.min(5.2, h * 0.21);
-      blocks.add(
+      const style =
+        h > 44
+          ? "glass"
+          : cz < -432
+            ? "brick"
+            : cx > 74
+              ? "residence"
+              : Math.floor(Math.abs(cx + cz)) % 3 === 0
+                ? "limestone"
+                : "glass";
+      const facade = buildings[style],
+        shop =
+          buildings[
+            style === "residence"
+              ? "cafe"
+              : style === "brick"
+                ? "depot"
+                : "lobby"
+          ];
+      const podium = Math.min(4.6, Math.max(3.05, h * 0.24));
+      shop.add(
         transform(cx, base + podium * 0.5, cz, w + 1.8, podium, d + 1.8),
-        tone,
+        "#faf8ef",
       );
       facade.add(
         transform(cx, base + (h + podium) * 0.5, cz, w, h - podium, d),
-        glaze,
+        "#fcfbf3",
       );
       blocks.add(
         transform(cx, base + h + 0.42, cz, w + 0.6, 0.84, d + 0.6),
-        tone,
+        h > 39 ? glaze : tone,
       );
       if (h > 39) {
+        if (style === "glass" && h > 64) {
+          // Projecting vertical fins catch grazing light on the taller office blocks.
+          for (const side of [-1, 1])
+            for (const frac of [-0.34, 0, 0.34])
+              blocks.add(
+                transform(
+                  cx + side * (w * 0.5 + 0.18),
+                  base + h * 0.52,
+                  cz + d * frac,
+                  0.4,
+                  h * 0.91,
+                  0.27,
+                ),
+                "#a9b6b8",
+              );
+        }
         const crown = h * (0.09 + rng() * 0.21);
         facade.add(
           transform(
@@ -983,7 +1150,7 @@ function createScenery(root, night) {
             crown,
             d * 0.84,
           ),
-          glaze,
+          "#f0f4f4",
         );
         blocks.add(
           transform(cx, base + h + crown + 1, cz, w * 0.8, 1, d * 0.86),
@@ -1016,9 +1183,83 @@ function createScenery(root, night) {
           "#777d80",
         );
       }
+      // Paving and narrow landscaped setbacks connect the shops to the public sidewalk.
+      blocks.add(
+        transform(cx, base + 0.03, cz, w + 6.8, 0.12, d + 6.4),
+        "#a59e8c",
+      );
+      if (h > 22)
+        for (const side of [-1, 1]) {
+          blocks.add(
+            transform(
+              cx + side * (w * 0.5 + 1.7),
+              base + 0.23,
+              cz,
+              0.9,
+              0.44,
+              d * 0.45,
+            ),
+            "#999789",
+          );
+          shrubs.add(
+            transform(
+              cx + side * (w * 0.5 + 1.7),
+              base + 0.65,
+              cz,
+              0.54,
+              0.51,
+              d * 0.22,
+            ),
+            "#5a6a41",
+          );
+        }
       solid(cx, cz, w * 0.5 + 0.9, d * 0.5 + 0.9, base, h);
     }
 
+  for (const v of frontage) {
+    const { x, z, w, d, h } = v,
+      y = groundHeight(x, z);
+    buildings[v.base].add(transform(x, y + h * 0.5, z, w, h, d), "#fffdf5");
+    blocks.add(
+      transform(x, y + h + 0.16, z, w + 0.8, 0.34, d + 0.9),
+      "#a59c8e",
+    );
+    if (v.upper) {
+      buildings[v.upper].add(
+        transform(x, y + h + 2.75, z, w - 0.6, 5.5, d - 1.0),
+        "#fff8e8",
+      );
+      blocks.add(transform(x, y + h + 5.7, z, w, 0.35, d - 0.4), "#c4b9a0");
+    }
+    const face = x + w * 0.5;
+    blocks.add(
+      transform(face + 0.7, y + h - 0.3, z, 1.75, 0.19, d * 0.86),
+      v.upper ? "#baab91" : "#3e4748",
+    );
+    // The forecourt reaches the shoulder, leaving the marker and entrance clear.
+    blocks.add(
+      transform(face + 3.2, y + 0.06, z, 6.35, 0.12, d * 0.85),
+      "#a5a29a",
+    );
+    for (const end of [-1, 1])
+      blocks.add(
+        transform(face + 1.3, y + 0.53, z + d * 0.46 * end, 0.72, 1.06, 0.72),
+        "#8d8c80",
+      );
+    createSign(
+      root,
+      v.name.toUpperCase(),
+      v.upper ? "RESIDENT ENTRANCE" : "PERFORMANCE  /  SERVICE",
+      face + 0.04,
+      y + h - 0.38,
+      z,
+      Math.PI / 2,
+      Math.min(d * 0.64, 10),
+      1.04,
+      v.upper ? "#474641" : "#2c393a",
+    );
+    solid(x, z, w * 0.5, d * 0.5, y, h + (v.upper ? 5.7 : 0.4));
+  }
   const lampHeadMaterial = new THREE.MeshStandardMaterial({
     color: "#f1eadc",
     emissive: "#ffe6be",
@@ -1327,22 +1568,41 @@ function createScenery(root, night) {
       tone = trees[Math.floor(rng() * trees.length)];
     if (rng() > 0.77) {
       const h = size * 1.4;
-      posts.add(transform(x, y + h * 0.48, z, 0.22, h, 0.22), "#7a705a");
-      shrubs.add(
-        transform(x, y + h, z, size * 0.9, size * 0.82, size * 0.88, rng() * 6),
-        tone,
-      );
-      shrubs.add(
-        transform(
-          x + size * 0.53,
-          y + h - 0.55,
-          z + 0.22,
-          size * 0.68,
-          size * 0.61,
-          size * 0.64,
+      const parts = [];
+      parts.push([
+        posts,
+        posts.add(transform(x, y + h * 0.48, z, 0.27, h, 0.27), "#776650"),
+      ]);
+      parts.push([
+        shrubs,
+        shrubs.add(
+          transform(
+            x,
+            y + h,
+            z,
+            size * 0.9,
+            size * 0.82,
+            size * 0.88,
+            rng() * 6,
+          ),
+          tone,
         ),
-        tone,
-      );
+      ]);
+      parts.push([
+        shrubs,
+        shrubs.add(
+          transform(
+            x + size * 0.53,
+            y + h - 0.55,
+            z + 0.22,
+            size * 0.68,
+            size * 0.61,
+            size * 0.64,
+          ),
+          tone,
+        ),
+      ]);
+      treeRecord("oak", x, y, z, h + size * 0.82, parts, 0.35);
     } else if (rng() > 0.36)
       boulder.add(
         transform(
@@ -1408,6 +1668,14 @@ function createScenery(root, night) {
     const z = 300 - i * 15,
       x = 231 + (i % 2) * 5;
     if (roadAt(x, z, 4)) continue;
+    if (
+      frontage.some(
+        (v) =>
+          Math.abs(x - v.x) < v.w * 0.5 + 4.3 &&
+          Math.abs(z - v.z) < v.d * 0.5 + 4.3,
+      )
+    )
+      continue;
     tent(x, z, 4.3, flagTones[i % 3]);
     blocks.add(
       transform(x, groundHeight(x, z) + 0.56, z, 2.6, 1.12, 1.1),
@@ -1649,15 +1917,92 @@ function createScenery(root, night) {
     trialBoards.set(prop.boardId, prop);
     solid(x, z, 1.65, 1.65, y, 2.8, prop);
   }
+  // Preserve each local piece before batching so fall animation can rotate the whole tree around its roots.
+  for (const tree of forest)
+    tree.parts = tree.parts.map(([batch, id]) => ({
+      batch,
+      id,
+      bind: batch.items[id].matrix.clone(),
+    }));
   batches.finish();
+  for (const tree of forest)
+    for (const { batch, id } of tree.parts) {
+      const refs = (batch.mesh.userData.trees ??= new Map());
+      refs.set(id, tree);
+    }
+  root.userData.trees = forest;
+  const hinge = new THREE.Matrix4(),
+    turn = new THREE.Matrix4(),
+    back = new THREE.Matrix4(),
+    finalM = new THREE.Matrix4(),
+    axis = new THREE.Vector3();
+  function animateTrees(time) {
+    simulationTime = time;
+    for (let i = falling.length - 1; i >= 0; i--) {
+      const tree = falling[i],
+        t = clamp((time - tree.started) / 1.08, 0, 1);
+      tree.progress = t;
+      // Accelerate under gravity, then settle on the terrain.
+      const ax = tree.x + tree.dx * tree.height,
+        az = tree.z + tree.dz * tree.height;
+      const inclination = Math.atan2(
+        groundHeight(ax, az) - tree.y,
+        tree.height,
+      );
+      tree.angle = (Math.PI * 0.47 - inclination) * (t * t * (2 - t));
+      hinge.makeTranslation(tree.x, tree.y, tree.z);
+      turn.makeRotationAxis(axis.set(tree.dz, 0, -tree.dx), tree.angle);
+      back.makeTranslation(-tree.x, -tree.y, -tree.z);
+      hinge.multiply(turn).multiply(back);
+      for (const part of tree.parts) {
+        part.batch.mesh.setMatrixAt(
+          part.id,
+          finalM.multiplyMatrices(hinge, part.bind),
+        );
+        part.batch.mesh.instanceMatrix.needsUpdate = true;
+      }
+      if (t >= 1) falling.splice(i, 1);
+    }
+  }
   const hidden = transform(0, -200, 0, 0.001, 0.001, 0.001);
   function collide(p) {
     let smashed = 0,
+      trees = 0,
+      tree = null,
       boardId = null;
     const py = p.y ?? groundHeight(p.x, p.z);
     let solidHit = shoreDepth(p.x, p.z) < -3 && py < 2;
     for (const item of collisions.get(key(p.x, p.z)) || empty) {
       if (py > item.y + item.h + 0.35 || py < item.y - 2) continue;
+      if (item.smash?.tree) {
+        const hit = item.smash.tree;
+        if (hit.fallen) continue;
+        // Closest point on the oriented vehicle hull to a cylindrical trunk.
+        const yaw = p.heading || 0,
+          dx = item.x - p.x,
+          dz = item.z - p.z,
+          c = Math.cos(yaw),
+          s = Math.sin(yaw);
+        const lateral = dx * c - dz * s,
+          longitudinal = dx * s + dz * c;
+        const ex = Math.max(0, Math.abs(lateral) - 0.99),
+          ez = Math.max(0, Math.abs(longitudinal) - 2.28);
+        if (ex * ex + ez * ez > item.rx * item.rx) continue;
+        tree = { x: hit.x, z: hit.z };
+        if (Math.abs(p.speed || 0) < 7) {
+          solidHit = true;
+          continue;
+        }
+        const sign = Math.sign(p.speed || 1),
+          a = p.travel ?? yaw;
+        hit.fallen = true;
+        hit.started = simulationTime;
+        hit.dx = -Math.sin(a) * sign;
+        hit.dz = -Math.cos(a) * sign;
+        falling.push(hit);
+        trees++;
+        continue;
+      }
       if (
         Math.abs(p.x - item.x) > item.rx + 0.78 ||
         Math.abs(p.z - item.z) > item.rz + 0.78
@@ -1674,7 +2019,7 @@ function createScenery(root, night) {
         smashed++;
       } else solidHit = true;
     }
-    return { solid: solidHit, smashed, boardId };
+    return { solid: solidHit, smashed, boardId, trees, tree };
   }
   function surface(x, z, vehicleY) {
     const terrain = groundHeight(x, z),
@@ -1727,7 +2072,9 @@ function createScenery(root, night) {
     surface,
     resetBoards,
     boardAt: (id) => trialBoards.get(id),
-    update(n) {
+    trees: forest,
+    update(n, time) {
+      animateTrees(time);
       lampHeadMaterial.emissiveIntensity = 0.3 + n * 2.7;
     },
   };
@@ -1744,6 +2091,7 @@ export function createWorld(scene) {
     scenery = createScenery(root, night);
   return {
     group: root,
+    trees: scenery.trees,
     collide: scenery.collide,
     surface: scenery.surface,
     resetBoards: scenery.resetBoards,
@@ -1751,7 +2099,7 @@ export function createWorld(scene) {
     update(time, nightBlend = 0) {
       night.value = clamp(Number(nightBlend) || 0, 0, 1);
       ocean(time, night.value);
-      scenery.update(night.value);
+      scenery.update(night.value, time);
     },
     dispose() {
       const geometries = new Set(),

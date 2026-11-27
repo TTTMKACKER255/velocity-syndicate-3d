@@ -3,6 +3,9 @@
 import * as THREE from "three";
 import { createVehicle } from "../models/vehicle.js";
 import { createWorld, groundHeight } from "./world.js";
+import { materialPlate } from "./environment-materials.js";
+import { drawTrafficSprite } from "../models/traffic-sprites.js";
+import { deformPanel, clearPanelDents } from "../models/damage.js";
 
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 const mod = (x, n) => ((x % n) + n) % n;
@@ -19,9 +22,10 @@ function spriteCanvas(w, h) {
 
 // A small, depth-buffered sprite cache preserves the actual car's curved coachwork,
 // carbon aero, rims and light geometry without resubmitting a 100k-triangle model each frame.
-function carSprites(look) {
+function carSprites(look, dents = []) {
   const model = createVehicle(look),
     meshes = [];
+  if (dents.length) deformPanel(model.group, dents);
   model.group.updateMatrixWorld(true);
   const v = new THREE.Vector3(),
     n = new THREE.Vector3(),
@@ -53,6 +57,7 @@ function carSprites(look) {
       name: o.material.name,
     });
   });
+  clearPanelDents(model.group);
   model.dispose();
   const cache = new Map(),
     W = 432,
@@ -224,7 +229,7 @@ function scenery(group) {
         : rock
           ? [145, 140, 106]
           : x > -340 && z > -655 && z < 545
-            ? [126, 135, 108]
+            ? [152, 153, 133]
             : [113, 138, 88];
       const light = clamp(
         (v[0][1] - v[2][1]) * 0.24 + 1.5 * Math.sin(x * 0.034 + z * 0.021),
@@ -243,7 +248,7 @@ function scenery(group) {
       continue;
     const source = o.geometry.attributes.position,
       cols = o.geometry.attributes.color;
-    if (o.material.map?.image) {
+    if (o.material.map?.image && o.geometry.type === "PlaneGeometry") {
       data.items.push({
         kind: "sign",
         x: o.position.x,
@@ -269,6 +274,14 @@ function scenery(group) {
         color.getHex(),
         i === 4 ? 3 : i === 3 ? 1 : i === 2 ? 2 : 4,
       );
+      if (o.name === "Wet asphalt" || o.name === "Stone paving") {
+        const uv = o.geometry.attributes.uv;
+        element.tex = o.name === "Wet asphalt" ? "asphalt" : "pavement";
+        element.uv = Array.from({ length: 4 }, (_, j) => [
+          uv.getX(k + j),
+          1 - uv.getY(k + j),
+        ]);
+      }
       if (i === 1) data.distance.push(element);
       else data.strips.push(element);
     }
@@ -276,6 +289,7 @@ function scenery(group) {
   for (const o of group.children.filter((n) => n.isInstancedMesh)) {
     const type = o.geometry.type;
     for (let j = 0; j < o.count; j++) {
+      if (o.material.userData.foliage || o.userData.trees?.has(j)) continue;
       o.getMatrixAt(j, m);
       m.decompose(pos, quat, scale);
       o.getColorAt(j, color);
@@ -299,7 +313,9 @@ function scenery(group) {
           d,
           a,
           c,
-          facade: o.material.hasOwnProperty("onBeforeCompile"),
+          facade: Boolean(o.material.userData.plate),
+          plate: o.material.userData.plate,
+          shop: o.material.userData.store,
           source: o,
           id: j,
         });
@@ -336,6 +352,16 @@ function scenery(group) {
       }
     }
   }
+  for (const tree of group.userData.trees || [])
+    data.items.push({
+      kind: tree.kind === "palm" ? "palm" : "tree",
+      x: tree.x,
+      y: tree.y,
+      z: tree.z,
+      h: tree.visualHeight,
+      seed: Math.floor(tree.x + tree.z),
+      tree,
+    });
   return data;
 }
 
@@ -346,18 +372,39 @@ export function createSoftwareView(canvas, look = {}, worldGroup) {
     worldGroup = ownWorld.group;
   }
   const map = scenery(worldGroup),
-    car = carSprites(look),
     ctx = canvas.getContext("2d", { alpha: false });
-  const grain = spriteCanvas(96, 96),
-    gc = grain.getContext("2d"),
-    gi = gc.createImageData(96, 96);
-  for (let i = 0; i < gi.data.length; i += 4) {
-    const bits = mod(Math.sin(i * 0.731 + 5.62) * 881.1, 1);
-    gi.data[i] = gi.data[i + 1] = gi.data[i + 2] = bits > 0.5 ? 238 : 15;
-    gi.data[i + 3] = 3 + Math.floor(bits * 12);
+  let car = carSprites(look),
+    dentList = null;
+  const plateCache = new Map();
+  // Resolve textures once per lighting band. The paint loop reuses patterns and mip-sized images.
+  function appearance(name, shade = 1, d = 0) {
+    const plate = materialPlate(name);
+    if (!plate.image) return null;
+    const dim = clamp(Math.round((1 - shade * (1 - night * 0.66)) * 6), 0, 5);
+    const level = d > 330 ? 2 : d > 105 ? 1 : 0,
+      key = name + "/" + dim + "/" + level;
+    if (plateCache.has(key)) return plateCache.get(key);
+    const src = plate.image,
+      img = spriteCanvas(
+        Math.max(20, Math.round(src.width / 2 ** level)),
+        Math.max(20, Math.round(src.height / 2 ** level)),
+      );
+    const c = img.getContext("2d");
+    c.drawImage(src, 0, 0, img.width, img.height);
+    if (dim) {
+      c.globalCompositeOperation = "source-atop";
+      c.fillStyle = "rgba(12,20,33," + dim / 7 + ")";
+      c.fillRect(0, 0, img.width, img.height);
+    }
+    const entry = {
+      image: img,
+      pattern: ctx.createPattern(img, "repeat"),
+      plate,
+      key,
+    };
+    plateCache.set(key, entry);
+    return entry;
   }
-  gc.putImageData(gi, 0, 0);
-  const asphalt = ctx.createPattern(grain, "repeat");
   const clouds = spriteCanvas(768, 160),
     cc = clouds.getContext("2d"),
     ci = cc.createImageData(768, 160);
@@ -493,11 +540,293 @@ export function createSoftwareView(canvas, look = {}, worldGroup) {
         ctx.strokeStyle = fill;
         ctx.lineWidth = 0.8;
         ctx.stroke();
-        if (min < 135) {
-          ctx.fillStyle = asphalt;
-          ctx.fill();
-        }
       }
+    }
+  }
+  function texturedQuad(world, uv, entry, refine = 1) {
+    if (!entry?.pattern) return;
+    const image = entry.image;
+    const pts = world.map((v, i) => [...cameraSpace(v), uv[i][0], uv[i][1]]);
+    function interpolate(a, b, t) {
+      return a.map((v, i) => v + (b[i] - v) * t);
+    }
+    function triangle(a, b, c) {
+      const pa = projection(a),
+        pb = projection(b),
+        pc = projection(c);
+      if (
+        Math.max(pa[0], pb[0], pc[0]) < 0 ||
+        Math.max(pa[1], pb[1], pc[1]) < 0 ||
+        Math.min(pa[0], pb[0], pc[0]) > w ||
+        Math.min(pa[1], pb[1], pc[1]) > h
+      )
+        return;
+      const dx1 = pb[0] - pa[0],
+        dy1 = pb[1] - pa[1],
+        dx2 = pc[0] - pa[0],
+        dy2 = pc[1] - pa[1];
+      const u = a[3] * image.width,
+        v = a[4] * image.height;
+      const u1 = (b[3] - a[3]) * image.width,
+        v1 = (b[4] - a[4]) * image.height,
+        u2 = (c[3] - a[3]) * image.width,
+        v2 = (c[4] - a[4]) * image.height;
+      const det = u1 * v2 - u2 * v1;
+      if (Math.abs(det) < 1e-6) return;
+      const xx = (dx1 * v2 - dx2 * v1) / det,
+        yx = (dy1 * v2 - dy2 * v1) / det,
+        xy = (dx2 * u1 - dx1 * u2) / det,
+        yy = (dy2 * u1 - dy1 * u2) / det;
+      ctx.setTransform(
+        xx,
+        yx,
+        xy,
+        yy,
+        pa[0] - xx * u - xy * v,
+        pa[1] - yx * u - yy * v,
+      );
+      ctx.beginPath();
+      ctx.moveTo(u, v);
+      ctx.lineTo(u + u1, v + v1);
+      ctx.lineTo(u + u2, v + v2);
+      ctx.closePath();
+      ctx.fillStyle = entry.pattern;
+      ctx.fill();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+    }
+    function draw(q) {
+      const clipped = [];
+      for (let i = 0; i < q.length; i++) {
+        const a = q[i],
+          b = q[(i + 1) % q.length],
+          ina = a[2] > 1.0,
+          inb = b[2] > 1.0;
+        if (ina) clipped.push(a);
+        if (ina !== inb)
+          clipped.push(interpolate(a, b, (1 - a[2]) / (b[2] - a[2])));
+      }
+      for (let k = 1; k < clipped.length - 1; k++)
+        triangle(clipped[0], clipped[k], clipped[k + 1]);
+    }
+    // Split along the axis with the greatest change in perspective.
+    const along =
+      Math.abs(pts[0][2] - pts[1][2]) > Math.abs(pts[0][2] - pts[3][2]);
+    const [a, b, c, d] = along ? pts : [pts[0], pts[3], pts[2], pts[1]];
+    for (let k = 0; k < refine; k++) {
+      const i = k / refine,
+        j = (k + 1) / refine;
+      draw([
+        interpolate(a, b, i),
+        interpolate(a, b, j),
+        interpolate(d, c, j),
+        interpolate(d, c, i),
+      ]);
+    }
+  }
+  // Raster the near ground in one transparent pass. Interpolating u/z and v/z across
+  // scanlines keeps the asphalt grain stationary and removes affine seams at the bumper.
+  const groundCanvas = spriteCanvas(1, 1),
+    groundCtx = groundCanvas.getContext("2d");
+  let groundImage,
+    groundPixels,
+    groundScale = 1;
+  function beginGround() {
+    const tw = Math.max(1, Math.min(680, w)),
+      th = Math.max(1, Math.round((h * tw) / w));
+    if (groundCanvas.width !== tw || groundCanvas.height !== th) {
+      groundCanvas.width = tw;
+      groundCanvas.height = th;
+      groundImage = groundCtx.createImageData(tw, th);
+      groundPixels = new Uint32Array(groundImage.data.buffer);
+    } else if (!groundImage) {
+      groundImage = groundCtx.createImageData(tw, th);
+      groundPixels = new Uint32Array(groundImage.data.buffer);
+    }
+    groundPixels.fill(0);
+    groundScale = tw / w;
+  }
+  function groundTriangle(A, B, C, entry) {
+    let rows = [A, B, C].sort((a, b) => a[1] - b[1]);
+    const [a, b, c] = rows;
+    if (c[1] < 0 || a[1] >= groundCanvas.height) return;
+    const det = (b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1]);
+    if (Math.abs(det) < 0.08) return;
+    const pixels = entry.pixels,
+      srcW = entry.image.width,
+      srcH = entry.image.height;
+    const dx = [],
+      dy = [];
+    for (let k = 2; k < 5; k++) {
+      dx[k] =
+        ((b[k] - a[k]) * (c[1] - a[1]) - (c[k] - a[k]) * (b[1] - a[1])) / det;
+      dy[k] =
+        ((b[0] - a[0]) * (c[k] - a[k]) - (c[0] - a[0]) * (b[k] - a[k])) / det;
+    }
+    const first = Math.max(0, Math.ceil(a[1] - 0.5)),
+      end = Math.min(groundCanvas.height - 1, Math.floor(c[1] - 0.5));
+    const long = (c[0] - a[0]) / (c[1] - a[1] || 1),
+      top = (b[0] - a[0]) / (b[1] - a[1] || 1),
+      bottom = (c[0] - b[0]) / (c[1] - b[1] || 1);
+    for (let yy = first; yy <= end; yy++) {
+      const ry = yy + 0.5 - a[1],
+        left = a[0] + ry * long,
+        right =
+          yy + 0.5 < b[1] ? a[0] + ry * top : b[0] + (yy + 0.5 - b[1]) * bottom;
+      const x0 = Math.max(0, Math.ceil(Math.min(left, right) - 0.5)),
+        x1 = Math.min(
+          groundCanvas.width - 1,
+          Math.floor(Math.max(left, right) - 0.5),
+        );
+      const rx = x0 + 0.5 - a[0];
+      let q = a[2] + dx[2] * rx + dy[2] * ry,
+        u = a[3] + dx[3] * rx + dy[3] * ry,
+        v = a[4] + dx[4] * rx + dy[4] * ry,
+        write = yy * groundCanvas.width + x0;
+      for (let x = x0; x <= x1; x++, write++) {
+        const z = 1 / q,
+          pu = u * z,
+          pv = v * z;
+        const tx = ((pu - Math.floor(pu)) * srcW) | 0,
+          ty = ((pv - Math.floor(pv)) * srcH) | 0;
+        groundPixels[write] = pixels[ty * srcW + tx];
+        q += dx[2];
+        u += dx[3];
+        v += dx[4];
+      }
+    }
+  }
+  function groundQuad(o, entry) {
+    if (!entry) return;
+    if (!entry.pixels)
+      entry.pixels = new Uint32Array(
+        entry.image
+          .getContext("2d")
+          .getImageData(
+            0,
+            0,
+            entry.image.width,
+            entry.image.height,
+          ).data.buffer,
+      );
+    const pts = o.p.map((v, i) => [...cameraSpace(v), ...o.uv[i]]),
+      clipped = [];
+    for (let i = 0; i < 4; i++) {
+      const a = pts[i],
+        b = pts[(i + 1) % 4],
+        ia = a[2] > near,
+        ib = b[2] > near;
+      if (ia) clipped.push(a);
+      if (ia !== ib) {
+        const t = (near - a[2]) / (b[2] - a[2]);
+        clipped.push(a.map((v, k) => v + (b[k] - v) * t));
+      }
+    }
+    const screen = clipped.map((v) => {
+      const [x, y] = projection(v),
+        q = 1 / v[2];
+      return [x * groundScale, y * groundScale, q, v[3] * q, v[4] * q];
+    });
+    for (let k = 1; k < screen.length - 1; k++)
+      groundTriangle(screen[0], screen[k], screen[k + 1], entry);
+  }
+  const wallCache = new Map();
+  function drawFacade(face, entry, across, tall, d) {
+    const base = entry.image,
+      key =
+        entry.plate.width +
+        "-" +
+        entry.plate.height +
+        "-" +
+        base.width +
+        "-" +
+        across +
+        "-" +
+        tall +
+        "-" +
+        Math.round(night * 4) +
+        "-" +
+        entry.key;
+    let wall = wallCache.get(key);
+    if (!wall) {
+      const width = Math.min(600, base.width * across),
+        height = Math.min(640, base.height * tall);
+      wall = spriteCanvas(width, height);
+      const wc = wall.getContext("2d");
+      for (let j = 0; j < tall; j++)
+        for (let i = 0; i < across; i++)
+          wc.drawImage(
+            base,
+            (i * width) / across,
+            (j * height) / tall,
+            width / across + 0.5,
+            height / tall + 0.5,
+          );
+      if (wallCache.size > 75) wallCache.delete(wallCache.keys().next().value);
+      wallCache.set(key, wall);
+    }
+    const q = face.map(cameraSpace);
+    if (q.some((v) => v[2] < 1.5)) {
+      texturedQuad(
+        face,
+        [
+          [0, 0],
+          [across, 0],
+          [across, tall],
+          [0, tall],
+        ],
+        entry,
+        6,
+      );
+      return;
+    }
+    const interpolate = (a, b, t) => a.map((v, i) => v + (b[i] - v) * t);
+    const steps = d < 42 ? 4 : d < 125 ? 2 : 1;
+    function clipTriangle(a, b, c) {
+      ctx.beginPath();
+      ctx.moveTo(a[0], a[1]);
+      ctx.lineTo(b[0], b[1]);
+      ctx.lineTo(c[0], c[1]);
+      ctx.closePath();
+      ctx.clip();
+    }
+    for (let k = 0; k < steps; k++) {
+      const t = k / steps,
+        n = (k + 1) / steps,
+        tl = projection(interpolate(q[0], q[1], t)),
+        tr = projection(interpolate(q[0], q[1], n)),
+        bl = projection(interpolate(q[3], q[2], t)),
+        br = projection(interpolate(q[3], q[2], n));
+      if (
+        Math.max(tl[0], tr[0], bl[0], br[0]) < 0 ||
+        Math.min(tl[0], tr[0], bl[0], br[0]) > w
+      )
+        continue;
+      const sw = wall.width / steps,
+        sh = wall.height;
+      ctx.save();
+      clipTriangle(tl, tr, bl);
+      ctx.setTransform(
+        (tr[0] - tl[0]) / sw,
+        (tr[1] - tl[1]) / sw,
+        (bl[0] - tl[0]) / sh,
+        (bl[1] - tl[1]) / sh,
+        tl[0],
+        tl[1],
+      );
+      ctx.drawImage(wall, t * wall.width, 0, sw, sh, 0, 0, sw, sh);
+      ctx.restore();
+      ctx.save();
+      clipTriangle(br, bl, tr);
+      ctx.setTransform(
+        (br[0] - bl[0]) / sw,
+        (br[1] - bl[1]) / sw,
+        (br[0] - tr[0]) / sh,
+        (br[1] - tr[1]) / sh,
+        bl[0] + tr[0] - br[0],
+        bl[1] + tr[1] - br[1],
+      );
+      ctx.drawImage(wall, t * wall.width, 0, sw, sh, 0, 0, sw, sh);
+      ctx.restore();
     }
   }
   function line(a, b, fill, width) {
@@ -534,34 +863,40 @@ export function createSoftwareView(canvas, look = {}, worldGroup) {
         continue;
       const shade = 1 + (dx * 0.12 - dz * 0.17) / (Math.hypot(dx, dz) || 1);
       poly([lower[i], lower[j], upper[j], upper[i]], tint(c, distance, shade));
-      if (o.facade && distance < 440) {
-        const point = (t, v) => [
-          corners[i][0] + dx * t,
-          y - sy * 0.5 + sy * v,
-          corners[i][1] + dz * t,
-        ];
-        const rows = clamp(Math.floor(sy / 3.6), 1, 20),
-          cols = clamp(Math.floor(Math.hypot(dx, dz) / 4), 1, 12);
-        const window = tint(c, distance, shade * 0.62),
-          edge = tint(0xafc0bd, distance, 0.86);
-        const width = Math.max(
-          0.5,
-          Math.min(2, (0.25 * f) / Math.max(4, distance)),
-        );
-        for (let k = 1; k < rows; k++)
-          line(point(0, k / rows), point(1, k / rows), window, width);
-        for (let k = 1; k < cols; k++)
-          line(point(k / cols, 0), point(k / cols, 1), edge, width * 0.6);
-        if (night > 0.35 && distance < 235)
-          for (let k = 1; k < rows; k += 3) {
-            const off = ((k * 13) % cols) / cols;
-            line(
-              point(off, (k + 0.34) / rows),
-              point(Math.min(1, off + 0.72 / cols), (k + 0.34) / rows),
-              tint(0xffcc83, distance, 1, 1),
-              width * 1.6,
-            );
+      if (o.plate && distance < 650) {
+        const entry = appearance(o.plate, Math.min(1, shade), distance);
+        if (entry) {
+          const across = Math.max(
+            1,
+            Math.round(Math.hypot(dx, dz) / entry.plate.width),
+          );
+          const tall = o.shop
+            ? 1
+            : Math.max(1, Math.round(sy / entry.plate.height));
+          const face = [upper[i], upper[j], lower[j], lower[i]];
+          drawFacade(face, entry, across, tall, distance);
+          if (night > 0.45 && !o.shop && distance < 195) {
+            const floors = Math.max(1, Math.floor(sy / 3.6));
+            const wallPoint = (u, v) => [
+              corners[i][0] + dx * u,
+              y - sy * 0.5 + sy * v,
+              corners[i][1] + dz * u,
+            ];
+            const count = clamp(Math.round(Math.hypot(dx, dz) / 3), 1, 32);
+            for (let k = 1; k < floors; k += 3) {
+              const start = ((k * 7 + i * 13) % count) / count;
+              line(
+                wallPoint(start, (k + 0.5) / floors),
+                wallPoint(
+                  Math.min(1, start + 0.56 / count),
+                  (k + 0.5) / floors,
+                ),
+                "rgba(255,206,138," + 0.72 * night + ")",
+                Math.max(0.7, (0.58 * f) / Math.max(5, distance)),
+              );
+            }
           }
+        }
       }
     }
     if (eye.y > y + sy * 0.5) poly(upper, tint(c, distance, 1.11));
@@ -633,8 +968,37 @@ export function createSoftwareView(canvas, look = {}, worldGroup) {
         line(o.v[0], o.v[1], tint(o.c, dist), clamp(width, 0.56, 70));
       return;
     }
-    if (o.kind === "palm") {
-      palm(o, dist);
+    if (o.kind === "palm" || o.kind === "tree") {
+      const record = o.tree,
+        entry = appearance(o.kind === "palm" ? "palm" : "oak", 1, dist);
+      if (entry && dist > 0.1 && record) {
+        const ht = o.h,
+          angle = record.angle || 0,
+          sine = Math.sin(angle),
+          cosine = Math.cos(angle);
+        const root = projected(o.x, o.y, o.z),
+          tip = projected(
+            o.x + record.dx * ht * sine,
+            o.y + ht * cosine,
+            o.z + record.dz * ht * sine,
+          );
+        if (root && tip) {
+          const ox = tip[0] - root[0],
+            oy = tip[1] - root[1],
+            length = Math.hypot(ox, oy),
+            img = entry.image;
+          const width = ((img.width / img.height) * ht * f) / Math.max(1, dist);
+          const height = Math.max(
+            width * (o.kind === "tree" ? 0.61 : 0.2),
+            length,
+          );
+          ctx.save();
+          ctx.translate(root[0], root[1]);
+          ctx.rotate(Math.atan2(ox, -oy));
+          ctx.drawImage(img, -width / 2, -height, width, height);
+          ctx.restore();
+        }
+      } else palm(o, dist);
       return;
     }
     if (o.kind === "sign") {
@@ -813,6 +1177,7 @@ export function createSoftwareView(canvas, look = {}, worldGroup) {
     f = h / (2 * Math.tan((fov * Math.PI) / 360));
   }
   function trafficCar(o, dist, id) {
+    if (drawTrafficSprite(ctx, o, eye, projected, f, dist, night)) return;
     const p = o.position,
       y = p.y ?? groundHeight(p.x, p.z),
       a = o.rotation?.y || 0;
@@ -984,7 +1349,14 @@ export function createSoftwareView(canvas, look = {}, worldGroup) {
     traffic = [],
     mission = null,
     parts = [],
+    overlays = null,
   ) {
+    const dents = p.dents || null;
+    if (dents !== dentList) {
+      car.clear();
+      car = carSprites(look, dents || []);
+      dentList = dents;
+    }
     w = canvas.width || 1;
     h = canvas.height || 1;
     clock = t;
@@ -1003,11 +1375,34 @@ export function createSoftwareView(canvas, look = {}, worldGroup) {
       list.sort(
         (a, b) => (sortedByLayer ? a.o.layer - b.o.layer : 0) || b.d - a.d,
       );
-      for (const { o, d } of list) poly(o.p, tint(o.c, d), o.layer === 2);
+      if (!sortedByLayer) {
+        for (const { o, d } of list) poly(o.p, tint(o.c, d));
+        return;
+      }
+      beginGround();
+      let painted = false;
+      function compositeGround() {
+        if (painted) {
+          groundCtx.putImageData(groundImage, 0, 0);
+          ctx.drawImage(groundCanvas, 0, 0, w, h);
+        }
+        painted = false;
+      }
+      for (const { o, d } of list) {
+        if (o.layer > 2 && painted) compositeGround();
+        poly(o.p, tint(o.c, d), o.layer === 2);
+        if (o.tex && d < 145) {
+          const entry = appearance(o.tex, 1, d > 65 ? 350 : d > 26 ? 160 : 0);
+          groundQuad(o, entry);
+          painted = true;
+        }
+      }
+      compositeGround();
     };
     drawTerrain(map.distance, 4100, 220);
     drawTerrain(map.ground, 1200, 93);
     drawTerrain(map.strips, 720, 24, true);
+    overlays?.marks?.drawSoftware(poly, p);
     const visibleItems = [];
     for (const o of map.items) {
       const radius =
@@ -1024,7 +1419,13 @@ export function createSoftwareView(canvas, look = {}, worldGroup) {
         (Math.max(o.w, o.h, o.d) * f) / d < 2
       )
         continue;
-      if (o.kind === "palm" && d > 1 && d < 132 && night < 0.8) {
+      if (
+        o.kind === "palm" &&
+        !o.tree?.fallen &&
+        d > 1 &&
+        d < 132 &&
+        night < 0.8
+      ) {
         const sx = -o.h * 0.54,
           sz = o.h * 0.22,
           sy = groundHeight(o.x + sx, o.z + sz) + 0.32;
@@ -1107,12 +1508,15 @@ export function createSoftwareView(canvas, look = {}, worldGroup) {
         ctx.stroke();
       }
     }
+    overlays?.beacons?.drawSoftware(ctx, projected, depth, { f, w, h }, p);
     drawCar(p, index, mission);
   }
   return {
     render,
     dispose() {
       car.clear();
+      plateCache.clear();
+      wallCache.clear();
       ownWorld?.dispose();
     },
   };
