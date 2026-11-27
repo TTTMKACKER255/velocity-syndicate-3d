@@ -45,13 +45,18 @@ const roadData = [
   ['Promenade', 14, [[150,-506],[150,-380],[150,-190],[150,0],[150,180],[150,495]], false],
   ['Freight Way', 12, [[-229,-819],[-110,-860],[80,-860],[249,-860]], false],
   ['Lookout Drive', 12, [[-862,-310],[-808,-154],[-696,-110],[-603,-185],[-503,-294]], false],
+  ['Skyline Expressway', 16, [[-255,380],[-210,362],[-145,310],[-75,222],[-60,125],[-60,-50],[-46,-250],[-14,-429],[55,-516],[116,-560]], false],
 ];
-export const roads = roadData.map(([name,width,anchors,closed],i) => ({name,width,points:curve(anchors,closed,i < 3 || i === 11)}));
+export const roads = roadData.map(([name,width,anchors,closed],i) => ({name,width,points:curve(anchors,closed,i < 3 || i >= 11)}));
 const stations = roads.map(({points}) => {
   let sum = 0;
   return points.map(([x,z],i) => i ? sum += Math.hypot(x-points[i-1][0],z-points[i-1][1]) : 0);
 });
 export const roadLengths = stations.map(list => list.at(-1));
+const expressway=12;
+function deckHeight(distance){
+  return 9.6*smooth(3,140,Math.min(distance,roadLengths[expressway]-distance));
+}
 export function routePoint(index, distance) {
   const pts = roads[index].points, sta = stations[index];
   const length = roadLengths[index];
@@ -102,14 +107,14 @@ roads.forEach(({points,width},road) => {
   for(let i=1;i<points.length;i++) {
     const [x,z]=points[i-1],[bx,bz]=points[i],dx=bx-x,dz=bz-z;
     indexBounds(segments,Math.min(x,bx)-pad,Math.max(x,bx)+pad,Math.min(z,bz)-pad,Math.max(z,bz)+pad,
-      {x,z,dx,dz,length2:dx*dx+dz*dz,width,road});
+      {x,z,dx,dz,length2:dx*dx+dz*dz,width,road,station:stations[road][i-1]});
   }
 });
 const empty = [];
-function roadAt(x,z,extra=0,exclude=-1) {
+function roadAt(x,z,extra=0,exclude=-1,groundOnly=false) {
   const nearby=segments.get(key(x,z)) || empty;
   for(const s of nearby) {
-    if(s.road===exclude) continue;
+    if(s.road===exclude || (groundOnly && s.road===expressway && deckHeight(s.station)>1)) continue;
     const u=clamp(((x-s.x)*s.dx+(z-s.z)*s.dz)/s.length2,0,1);
     const dist2=(x-s.x-u*s.dx)**2+(z-s.z-u*s.dz)**2;
     if(dist2 < (s.width/2+extra)**2) return true;
@@ -226,7 +231,7 @@ function makeOcean(root) {
 function routeStrip(builder,p,q,left,right,height,color) {
   function at(s,d){
     const x=s.x+Math.cos(s.heading)*d,z=s.z-Math.sin(s.heading)*d;
-    return [x,groundHeight(x,z)+height,z];
+    return [x,groundHeight(x,z)+(s.elevation||0)+height,z];
   }
   builder.quad(at(p,left),at(p,right),at(q,right),at(q,left),color);
 }
@@ -236,12 +241,16 @@ function makeRoads(root){
   const white=new THREE.Color('#dbdad2'),yellow=new THREE.Color('#eeb84e');
   roads.forEach((rd,i)=>{
     const length=roadLengths[i], half=rd.width/2, step=5.2, h=.19+i*.006;
-    const endpoint = d => routePoint(i,Math.min(d,length-0.001));
+    const endpoint = d => {
+      const p=routePoint(i,Math.min(d,length-0.001));
+      p.elevation=i===expressway ? deckHeight(d) : 0;
+      return p;
+    };
     for(let d=0;d<length;d+=step) {
       const p=endpoint(d),q=endpoint(d+step), mid=endpoint(d+step*.5);
       routeStrip(asphalt,p,q,-half,half,h,black);
-      if(roadAt(mid.x,mid.z,1,i))continue;
-      const walk=i===1||i===11 ? 1.3 : 2.6;
+      if(mid.elevation<1 && roadAt(mid.x,mid.z,1,i,true))continue;
+      const walk=i===expressway ? .65 : i===1||i===11 ? 1.3 : 2.6;
       for(const s of [-1,1]) {
         routeStrip(stone,p,q,s*half,s*(half+walk),h+.06,i===1||i===11 ? shoulder:sidewalk);
         routeStrip(lines,p,q,s*(half-.68),s*(half-.51),h+.024,white);
@@ -435,6 +444,7 @@ function createScenery(root,night) {
   }
   roads.forEach((rd,i)=>{
     const length=roadLengths[i];
+    if(i===expressway)return;
     for(let d=17;d<length-8;d+=(i<3?48:70)){
       const p=routePoint(i,d), offset=rd.width/2+1.25,s=(Math.round(d/48)%2?1:-1);
       const x=p.x+s*Math.cos(p.heading)*offset,z=p.z-s*Math.sin(p.heading)*offset;
@@ -449,6 +459,37 @@ function createScenery(root,night) {
       if((i===0||i===1)&&d%192<50)barrier(p.x+Math.cos(p.heading)*(rd.width/2+.35),p.z-Math.sin(p.heading)*(rd.width/2+.35),p.heading+Math.PI/2);
     }
   });
+
+  // Girders and columns follow the same elevation profile as the upper carriageway.
+  // Omit supports at ground-level carriageways to leave the underpasses clear.
+  const deck=stripBuilder(),concrete=new THREE.Color('#aba99c');
+  const de=roadLengths[expressway],half=roads[expressway].width/2;
+  for(let station=3;station<de-3;station+=5){
+    const end=Math.min(de-3,station+5),p=routePoint(expressway,station),q=routePoint(expressway,end);
+    function side(s,d,offset,dy){
+      const x=s.x+Math.cos(s.heading)*offset,z=s.z-Math.sin(s.heading)*offset;
+      return [x,groundHeight(x,z)+deckHeight(d)+dy,z];
+    }
+    if(deckHeight(station)<.45)continue;
+    const l=half+.65;
+    for(const sign of [-1,1]) {
+      const a=side(p,station,sign*l,1.36),b=side(q,end,sign*l,1.36);
+      const c=side(q,end,sign*l,-.75),d=side(p,station,sign*l,-.75);
+      deck.quad(a,b,c,d,concrete);
+      const e=side(p,station,sign*(l-.33),1.36),f=side(q,end,sign*(l-.33),1.36);
+      deck.quad(e,f,b,a,concrete);deck.quad(e,f,side(q,end,sign*(l-.33),.25),side(p,station,sign*(l-.33),.25),concrete);
+      const mx=(a[0]+b[0])*.5,mz=(a[2]+b[2])*.5,rad=.38;
+      solid(mx,mz,Math.abs(b[0]-a[0])*.5+rad,Math.abs(b[2]-a[2])*.5+rad,Math.min(a[1],b[1])-1.2,1.25);
+    }
+    deck.quad(side(p,station,-l,-.75),side(q,end,-l,-.75),side(q,end,l,-.75),side(p,station,l,-.75),concrete);
+    if((station-3)%40===0 && !roadAt(p.x,p.z,2.1,expressway)){
+      const base=groundHeight(p.x,p.z),h=deckHeight(station);
+      blocks.add(transform(p.x,base+h*.47,p.z,2.5,h*.94,1.8,p.heading),'#a6a89e');
+      blocks.add(transform(p.x,base+h-.95,p.z,half*1.65,.95,2.25,p.heading),'#b6b6a8');
+      solid(p.x,p.z,1.4,1.1,base,h-.9);
+    }
+  }
+  root.add(new THREE.Mesh(deck.finish(),geometricMaterial()));
 
   // Powder-coated steel rail, beachcomber palms, and short piers line the ocean side.
   for(let z=-464;z<452;z+=15){
@@ -642,8 +683,19 @@ function createScenery(root,night) {
     }
     return {solid:solidHit,smashed};
   }
-  function surface(x,z){
-    const onRoad=roadAt(x,z),base=groundHeight(x,z)+(onRoad ? .25 : .015);
+  function surface(x,z,vehicleY){
+    const terrain=groundHeight(x,z), onRoad=roadAt(x,z,0,-1,true), base=terrain+(onRoad ? .25 : .015);
+    // A reference height preserves the active level at flyovers and permits landing on the deck.
+    let closest=Infinity, flyoverHeight;
+    for(const s of segments.get(key(x,z))||empty){
+      if(s.road!==expressway)continue;
+      const u=clamp(((x-s.x)*s.dx+(z-s.z)*s.dz)/s.length2,0,1);
+      const dsq=(x-s.x-u*s.dx)**2+(z-s.z-u*s.dz)**2;
+      if(dsq>=(s.width*.5+.2)**2 || dsq>=closest)continue;
+      closest=dsq;flyoverHeight=terrain+.265+deckHeight(s.station+u*Math.sqrt(s.length2));
+    }
+    if(flyoverHeight!==undefined && (vehicleY??terrain)>=flyoverHeight-1.7)
+      return {height:flyoverHeight,road:true,ramp:false};
     for(const r of ramps){
       const dx=x-r.x,dz=z-r.z,u=dx*r.fx+dz*r.fz,v=dx*r.rx+dz*r.rz;
       if(Math.abs(u)<=r.length/2&&Math.abs(v)<=r.width/2)
