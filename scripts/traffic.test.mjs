@@ -87,3 +87,63 @@ test("flyovers, clear side lanes and cars separating do not exchange impulses", 
     -2,
   );
 });
+
+test("a fixed driving step deforms only the struck instance and publishes damage to the player renderer", async () => {
+  const THREE = await import("three");
+  const { RaceGraphics } = await import("../src/graphics.js");
+  const { routePoint } = await import("../src/world.js");
+  const { lanePose } = await import("../src/traffic-physics.js");
+  const { createTrafficModel, disposeTrafficModel } = await import(
+    "../models/traffic.js"
+  );
+  const [hitCar, otherCar] = [0, 1].map(() =>
+    createTrafficModel(0x768687, "wagon"),
+  );
+  const target = lanePose(routePoint(0, 100)),
+    s = Math.sin(target.heading),
+    c = Math.cos(target.heading);
+  const driver = newDriver(
+    {
+      x: target.x + 4.2 * s + 0.3 * c,
+      z: target.z + 4.2 * c - 0.3 * s,
+      heading: target.heading,
+    },
+    target.y,
+  );
+  driver.speed = 35;
+  const sim = Object.create(RaceGraphics.prototype);
+  const body = trafficBody(target, 1450, hitCar.userData);
+  Object.assign(sim, {
+    playerBody: new THREE.Group(),
+    world: { surface: () => ({ height: target.y - 0.07 }) },
+    traffic: [{ mesh: hitCar, body, road: 0, dist: 100, speed: 9 }],
+    rival: new THREE.Group(),
+    interceptor: new THREE.Group(),
+  });
+  const paint = (group) =>
+    group.levels[0].object.children.find(
+      (mesh) => mesh.material.name === "Coachwork",
+    ).geometry;
+  try {
+    const shared = paint(otherCar);
+    assert.equal(paint(hitCar), shared);
+    assert.ok(sim.stepTraffic(STEP, driver, null, 0) > 15);
+    assert.equal(driver.dents.length, 1);
+    assert.equal(hitCar.userData.dents.length, 1);
+    assert.equal(otherCar.userData.dents.length, 0);
+    assert.notEqual(paint(hitCar), shared);
+    const moved = paint(hitCar).attributes.position.array,
+      original = shared.attributes.position.array;
+    let changes = 0;
+    for (let i = 0; i < moved.length; i++)
+      if (Math.abs(moved[i] - original[i]) > 0.001) changes++;
+    assert.ok(changes > 0 && changes < moved.length * 0.25);
+    for (let i = 0; i < 50; i++) sim.stepTraffic(STEP, driver, null, 0);
+    assert.equal(hitCar.position.x, body.x);
+    assert.equal(hitCar.rotation.y, body.heading);
+    assert.ok(Math.hypot(body.x - body.target.x, body.z - body.target.z) > 1);
+  } finally {
+    disposeTrafficModel(hitCar);
+    disposeTrafficModel(otherCar);
+  }
+});
