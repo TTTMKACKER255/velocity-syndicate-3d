@@ -336,18 +336,34 @@ function aero(batch,m,shape,style,options) {
   for(const s of [-1,1]){
     batch.oval(m.grille,s*.641,.344,nose-.017,.171,.085,.027,[0,s*.12,s*.09]);
     for(let j=0;j<3;j++) batch.box(m.seams,s*.64,.303+j*.036,nose-.045,.271,.010,.016,[0,s*.119,s*.07]);
-    // An oval projector housing follows the raised front shoulder.
-    const x=s*.737, z=-1.87, y=shape.top(z,x/shape.width(z))+.014;
-    const round=style.round, pitch=-.695;
-    batch.oval(m.carbon,x,y,z,.135+.033*(1-round),.035,.122+.064*round,[pitch,0,s*.13]);
-    batch.oval(m.glass,x,y+.012,z-.012,.119+.024*(1-round),.031,.109+.050*round,[pitch,0,s*.13]);
-    const ring=[];
-    for(let i=0;i<=40;i++){
-      const a=TAU*i/40,rx=(.104+.018*(1-round))*Math.cos(a),rz=(.104+.040*round)*Math.sin(a);
-      ring.push([x+rx,y+.017+.64*rz,z+.755*rz-.013]);
+    if (style.round > .5) {
+      // An oval projector housing follows the raised front shoulder.
+      const x=s*.737, z=-1.87, y=shape.top(z,x/shape.width(z))+.014;
+      const round=style.round, pitch=-.695;
+      batch.oval(m.carbon,x,y,z,.135+.033*(1-round),.035,.122+.064*round,[pitch,0,s*.13]);
+      batch.oval(m.glass,x,y+.012,z-.012,.119+.024*(1-round),.031,.109+.050*round,[pitch,0,s*.13]);
+      const ring=[];
+      for(let i=0;i<=40;i++){
+        const a=TAU*i/40,rx=(.104+.018*(1-round))*Math.cos(a),rz=(.104+.040*round)*Math.sin(a);
+        ring.push([x+rx,y+.017+.64*rz,z+.755*rz-.013]);
+      }
+      batch.line(m.light,ring,.0085,45,7);
+      batch.oval(m.light,x,y+.025,z-.024,.052,.011,.045,[pitch,0,s*.13]);
+    } else {
+      const lamp = [];
+      for(let i=0;i<=18;i++){
+        const t=i/18, x=s*(.446+.368*t), z=-2.107+.162*t*t;
+        lamp.push([x,shape.top(z,x/shape.width(z))+.016,z]);
+      }
+      batch.line(m.carbon,lamp,.040,24,10);
+      batch.line(m.light,lamp.map(([x,y,z])=>[x,y+.018,z-.023]),.012,24);
+      if(options.body==='muscle'||options.body==='tuner') {
+        for(const t of [.31,.67]){
+          const [x,y,z]=lamp[Math.round(t*18)];
+          batch.oval(m.glass,x,y+.005,z-.021,.038,.025,.029);
+        }
+      }
     }
-    batch.line(m.light,ring,.0085,45,7);
-    batch.oval(m.light,x,y+.025,z-.024,.052,.011,.045,[pitch,0,s*.13]);
     const stripZ=1.12;
     if(style.tail<1.65) for(let j=0;j<8;j++) {
       const zz=stripZ+j*.055, u=.44;
@@ -394,8 +410,59 @@ function aero(batch,m,shape,style,options) {
         1.88+.138*Math.cos(a)+.023*x*x];
     }));
   }
+  if(reinforced) {
+    for(const s of [-1,1]){
+      batch.line(m.carbon,[[s*.39,.224,-2.245],[s*.70,.237,-2.255],[s*.847,.272,-2.13]],.022,17);
+      batch.line(m.accent,[[s*.46,.218,-2.247],[s*.72,.236,-2.263],[s*.845,.269,-2.14]],.007,16);
+      batch.box(m.carbon,s*.672,.236,2.11,.024,.135,.297,[-.24,0,0]);
+      batch.line(m.accent,[[s*.337,.25,2.213],[s*.64,.274,2.201],[s*.805,.30,2.135]],.009,16);
+    }
+  }
   if(options.underglow && options.underglow!=='off'){
     for(const s of [-1,1]) batch.line(m.neon,[[s*.869,.148,-.91],[s*.89,.15,0],[s*.93,.166,.9]],.012,12);
+  }
+}
+
+// Silhouette changes are paired with mechanical details specific to each
+// layout. These features are generated at the panel coordinates after shaping.
+function variantDetails(batch, m, shape, options) {
+  const type=options.body ?? 'coupe';
+  for(const s of [-1,1]) {
+    if(type==='muscle') {
+      const scoop=[];
+      for(let j=0;j<=15;j++){
+        const z=-1.89+j*.87/15, u=.237;
+        scoop.push([s*shape.width(z)*u,shape.top(z,u)+.018,z]);
+      }
+      batch.line(m.paint,scoop,.032,20,10);
+      batch.oval(m.grille,s*.218,.693,-1.71,.083,.025,.059,[-.48,0,0]);
+    }
+    if(type==='wagon'){
+      const rearX=s*.817;
+      batch.line(m.grille,[[rearX,.638,2.165],[s*.865,.747,2.142],[s*.832,.855,1.99]],.041,14);
+      batch.line(m.red,[[rearX,.638,2.198],[s*.865,.752,2.17],[s*.832,.865,1.99]],.02,14);
+    }
+    if(type==='tuner'){
+      for(const x of [.49,.676]){
+        batch.add(m.grille,new THREE.CylinderGeometry(.056,.056,.022,28),[s*x,.602,2.219],[Math.PI/2,0,0]);
+        batch.add(m.red,new THREE.TorusGeometry(.038,.009,8,32),[s*x,.602,2.235]);
+      }
+    }
+    if(type==='hyper'){
+      const points=[[s*.91,.67,.25],[s*.931,.67,.53],[s*.948,.59,.77],[s*.944,.416,.67],[s*.928,.48,.44]];
+      const verts=[...points[0],...points[1],...points[2],...points[3],...points[4]];
+      const intake=new THREE.BufferGeometry();
+      intake.setAttribute('position',new THREE.Float32BufferAttribute(verts,3));
+      intake.setIndex([0,1,2,0,2,3,0,3,4]);intake.computeVertexNormals();
+      batch.add(m.grille,intake);
+      batch.line(m.carbon,[points[0],points[4],points[3],points[2]],.019,18);
+    }
+    if(type==='gt'||type==='sport') {
+      for(let j=0;j<3;j++){
+        const z=-.823+j*.047, x=s*(shape.width(z)+.024);
+        batch.line(m.grille,[[x,.515,z],[x+s*.002,.573,z+.013],[x-.012*s,.651,z+.055]],.009,9);
+      }
+    }
   }
 }
 
@@ -409,6 +476,7 @@ export function createVehicle(options = {}) {
   const shape=bodywork(body,materials,style,options);
   cabin(body,materials,style,shape);
   aero(body,materials,shape,style,options);
+  variantDetails(body,materials,shape,options);
   body.attach(chassis);group.add(chassis);
 
   const wheels=[], geometrySet=new Set();
@@ -431,6 +499,11 @@ export function createVehicle(options = {}) {
     plume.position.set(s*.185,.324,2.44);plume.rotation.x=Math.PI/2;
     plume.visible=false;group.add(plume);plumes.push(plume);
   }
+  // A single broad beam covers both low-beam lamps. Its target follows the
+  // chassis, including pitch changes on ramps and downhill sections.
+  const lowBeam=new THREE.SpotLight(0xe1eeff,72,53,.63,.57,1.38);
+  lowBeam.name='Low beam';lowBeam.position.set(0,.63,-1.83);
+  lowBeam.target.position.set(0,-.31,-19);group.add(lowBeam,lowBeam.target);
   let triangles=0;
   group.traverse(obj=>{
     if(!obj.isMesh)return;
@@ -451,7 +524,8 @@ export function createVehicle(options = {}) {
         if(w.front) w.mount.rotation.y=steering;
       }
       materials.red.emissiveIntensity=state.brake>.01 || state.braking ? 3.1 : 1.35;
-      materials.light.emissiveIntensity=state.headlights === false ? .10 : 1.45;
+      lowBeam.visible=state.headlights !== false;
+      materials.light.emissiveIntensity=lowBeam.visible ? 1.45 : .10;
       clock+=dt;
       for(const plume of plumes) {
         plume.visible=Boolean(state.boosting || state.boost);
