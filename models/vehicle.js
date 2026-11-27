@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { clearPanelDents } from "./damage.js";
 
 // Model coordinates are metres, with the nose facing -Z. Panel surfaces and wheel
 // openings are sampled from continuous profiles so changes of wheelbase or roof
@@ -1319,6 +1320,7 @@ export function createVehicle(options = {}) {
     triangles +=
       (obj.geometry.index?.count ?? obj.geometry.attributes.position.count) / 3;
   });
+  group.userData.body = options.body || "coupe";
   group.userData.triangles = triangles;
   group.userData.forward = "-Z";
   let rotation = 0,
@@ -1350,6 +1352,7 @@ export function createVehicle(options = {}) {
       }
     },
     dispose() {
+      clearPanelDents(group);
       for (const geometry of geometrySet) geometry.dispose();
       for (const material of Object.values(materials)) material.dispose();
       group.removeFromParent();
