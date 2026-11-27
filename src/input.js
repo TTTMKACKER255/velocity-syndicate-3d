@@ -5,7 +5,7 @@ export class Controls {
     window.addEventListener('keydown', e => {
       if (!this.active || e.target.closest?.('input,select,textarea')) return;
       if (['Space','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Tab'].includes(e.code) && e.code!=='Tab') e.preventDefault();
-      if (!e.repeat && shortcuts[e.code]) this.action(shortcuts[e.code]);
+      if (shortcuts[e.code]) { e.preventDefault(); e.stopImmediatePropagation(); if (!e.repeat) this.action(shortcuts[e.code]); return; }
       this.keys.add(e.code);
     });
     window.addEventListener('keyup', e => this.keys.delete(e.code));

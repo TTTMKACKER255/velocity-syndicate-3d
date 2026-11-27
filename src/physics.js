@@ -23,7 +23,7 @@ export function vehicleStats(car, upgrades = {}) {
 }
 
 export function stepVehicle(p, input, tune, surfaceAt, dt = STEP) {
-  const surface = surfaceAt(p.x, p.z);
+  const surface = surfaceAt(p.x, p.z, p.y);
   const velocity = Math.abs(p.speed);
   const oldY = p.y;
   p.brake = input.brake;
@@ -55,7 +55,7 @@ export function stepVehicle(p, input, tune, surfaceAt, dt = STEP) {
   p.z -= Math.cos(p.travel) * p.speed * dt;
   p.distance += velocity * dt;
   if (p.drift) p.driftScore += velocity * Math.abs(angleDelta(p.heading, p.travel)) * dt * 3;
-  const next = surfaceAt(p.x, p.z);
+  const next = surfaceAt(p.x, p.z, p.y);
   if (!p.airborne && surface.ramp && !next.ramp && p.y > next.height + .5 && velocity > 12) {
     p.airborne = true; p.vy = Math.min(17, velocity * .34); p.airRoll = 0; p.airtime = 0;
   }

@@ -385,7 +385,7 @@ export function createShowroom(container,look={}) {
     }
     if(!dirty||time-lastRender<(software?125:32))return;
     lastRender=time;dirty=false;
-    const distance=Math.max(6.0,7.5/camera.aspect)*zoom;
+    const distance=Math.max(6.7,9.3/camera.aspect)*zoom;
     const horizontal=Math.cos(pitch)*distance;
     camera.position.set(Math.sin(yaw)*horizontal,.63+Math.sin(pitch)*distance,Math.cos(yaw)*horizontal);
     camera.lookAt(0,.59,0);

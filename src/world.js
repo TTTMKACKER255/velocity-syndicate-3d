@@ -272,8 +272,9 @@ function makeRoads(root){
       float glint=pow(1.-max(normalize(cameraPosition-roadWorld).y,0.),9.);
       float patch=smoothstep(.15,.85,sin(roadWorld.x*.08+sin(roadWorld.z*.07))*.4+.5);
       diffuseColor.rgb+=vec3(.028,.039,.044)*patch*glint;`);
+    shader.fragmentShader=shader.fragmentShader.replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor=mix(roughnessFactor,.13,patch*.85);');
   };
-  const roadMesh=new THREE.Mesh(asphalt.finish(),roadMat);roadMesh.receiveShadow=true;root.add(roadMesh);
+  const roadMesh=new THREE.Mesh(asphalt.finish(),roadMat);roadMesh.name='Wet asphalt';roadMesh.receiveShadow=true;root.add(roadMesh);
   root.add(new THREE.Mesh(stone.finish(),geometricMaterial()));
   root.add(new THREE.Mesh(lines.finish(),geometricMaterial()));
 }
