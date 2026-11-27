@@ -1,5 +1,6 @@
 import { roads, routePoint, roadLengths, groundHeight } from "../src/world.js";
-import { startDistance } from "../src/events.js";
+import { locations, markerPoint } from "../src/locations.js";
+import { drawMarker } from "./marker-art.js";
 const bounds = { x: -1390, z: -1310, w: 2040, h: 2490 };
 let atlas;
 function makeAtlas() {
@@ -123,20 +124,6 @@ export function drawMap(
     ])
       c.fillText(label, ...pt(x, z));
   }
-  for (const e of events) {
-    const p = routePoint(e.road, startDistance(e, roadLengths));
-    const [x, y] = pt(p.x, p.z);
-    c.save();
-    c.translate(x, y);
-    c.rotate(Math.PI / 4);
-    c.fillStyle = "#1c221f";
-    c.strokeStyle = e.color || "#ffc56f";
-    c.lineWidth = 2;
-    const r = local ? 4 : 7;
-    c.fillRect(-r, -r, r * 2, r * 2);
-    c.strokeRect(-r, -r, r * 2, r * 2);
-    c.restore();
-  }
   if (waypoint) {
     const [x, y] = pt(waypoint.x, waypoint.z);
     c.save();
@@ -152,6 +139,45 @@ export function drawMap(
     c.lineWidth = 2;
     c.stroke();
     c.restore();
+  }
+  const markerHits = [];
+  // Keep nearby map symbols individually selectable, even along the same block.
+  const displayItems = [...locations, ...events];
+  for (const item of displayItems) {
+    const p = markerPoint(item, routePoint, roadLengths),
+      point = pt(p.x, p.z);
+    let [x, y] = point;
+    const r = local ? (item.landmark ? 7.2 : 5.8) : 11;
+    if (x < -r || y < -r || x > w + r || y > h + r) continue;
+    if (!local) {
+      for (
+        let i = 0;
+        i < 8 && markerHits.some((k) => Math.hypot(k.x - x, k.y - y) < 24);
+        i++
+      ) {
+        const a = ((i % 4) * Math.PI) / 2,
+          offset = 25 * (1 + Math.floor(i / 4));
+        x = point[0] + Math.cos(a) * offset;
+        y = point[1] + Math.sin(a) * offset;
+      }
+      if (x !== point[0] || y !== point[1]) {
+        c.strokeStyle = item.color || "#ddbd93";
+        c.lineWidth = 1;
+        c.beginPath();
+        c.moveTo(...point);
+        c.lineTo(x, y);
+        c.stroke();
+      }
+    }
+    drawMarker(
+      c,
+      x,
+      y,
+      r,
+      item,
+      selected?.id === item.id || waypoint?.id === item.id,
+    );
+    markerHits.push({ x, y, r, item });
   }
   for (const t of traffic) {
     c.fillStyle = "#8aabc5";
@@ -174,5 +200,5 @@ export function drawMap(
   c.fill();
   c.stroke();
   c.restore();
-  return v;
+  return { ...v, markerHits };
 }

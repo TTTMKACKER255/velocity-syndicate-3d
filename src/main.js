@@ -12,13 +12,14 @@ import {
   upgradeNames,
 } from "./profile.js";
 import { vehicleStats } from "./physics.js";
-import { events, activities, storyLine, startDistance } from "./events.js";
+import { events, activities } from "./events.js";
 import { Controls } from "./input.js";
 import { GameAudio } from "../audio/engine.js";
 import coastalPhoto from "../assets/coastal.webp";
 import downtownPhoto from "../assets/downtown.webp";
 import canyonPhoto from "../assets/canyon.webp";
-import stationTrack from "../audio/bay-fm.ogg";
+import { tracks } from "../audio/tracks.js";
+import { locations, markerPoint } from "./locations.js";
 const photos = {
   coastal: coastalPhoto,
   downtown: downtownPhoto,
@@ -29,8 +30,14 @@ const app = document.querySelector("#app"),
   toastEl = document.querySelector("#toast");
 const profile = readProfile(),
   audio = new GameAudio(),
-  radio = new Audio(stationTrack);
-radio.loop = true;
+  radio = new Audio();
+radio.preload = "none";
+let songIndex = 0,
+  playRequest = 0,
+  mapCategory = "places",
+  returnPose = null;
+radio.src = tracks[songIndex].src;
+radio.loop = false;
 radio.volume = 0.22;
 audio.enabled = profile.settings.sound;
 const input = new Controls(action);
@@ -40,7 +47,7 @@ let screen = "hub",
   showroom = null,
   session = null,
   mapOverlay = null,
-  mapPick = events[0],
+  mapPick = locations[0],
   mapGps = null,
   mapResize = null,
   mapEpoch = 0;
@@ -136,10 +143,14 @@ function footer() {
     '" title="Play or pause Bay FM">' +
     icon("radio", 20) +
     '<b>BAY FM</b><span class="footer-sep"></span><span class="station-track">' +
-    (radioActive ? "On air · Afterhours Run" : "98.4 FM") +
+    (radioActive
+      ? tracks[songIndex].artist + " · " + tracks[songIndex].title
+      : "98.4 FM") +
     "</span>" +
-    icon(radioActive ? "volume" : "play", 12) +
+    icon(radioActive ? "pause" : "play", 12) +
     '</button><div class="footer-actions">' +
+    btn("radio-menu", icon("music", 16) + "Playlist", "utility") +
+    '<span class="footer-sep"></span>' +
     btn("controls", icon("control", 17) + "Controls", "utility") +
     '<span class="footer-sep"></span>' +
     btn("settings", icon("settings", 16) + "Settings", "utility") +
@@ -284,7 +295,7 @@ function controlsDialog() {
     ["Nitro", "Hold Shift", "Hold A"],
     ["Change camera", "C", "Y"],
     ["Recover car", "R", "X"],
-    ["Enter nearby event", "E", "LB"],
+    ["Use location / enter event", "E", "LB"],
     ["World map", "M", "View"],
     ["Headlights", "H", "D-pad ↑"],
     ["Pause", "Esc", "Menu"],
@@ -362,18 +373,85 @@ function changeSetting(k, v) {
   session?.graphics.resize();
   settingsDialog();
 }
-function toggleRadio() {
-  if (radioActive) {
-    radio.pause();
-    radioActive = false;
-  } else {
-    radio.muted = !profile.settings.sound;
-    radio.play().catch(() => notice("Audio playback is unavailable"));
-    radioActive = true;
-  }
+function refreshRadio() {
   const f = app.querySelector(".footer");
   if (f) f.outerHTML = footer();
-  else notice(radioActive ? "Bay FM · Afterhours Run" : "Bay FM paused");
+  const hud = app.querySelector('[data-act="radio-menu"].icon-button');
+  if (hud)
+    hud.title = radioActive
+      ? "Bay FM · " + tracks[songIndex].title
+      : "Bay FM radio";
+  if (dialog.open && dialogKind === "radio") renderRadio();
+}
+async function playSong(i) {
+  const index = (i + tracks.length) % tracks.length,
+    request = ++playRequest;
+  if (index !== songIndex) {
+    songIndex = index;
+    radio.src = tracks[index].src;
+  }
+  radio.muted = !profile.settings.sound;
+  try {
+    await radio.play();
+    if (request !== playRequest) return;
+    radioActive = true;
+    refreshRadio();
+  } catch (e) {
+    if (request !== playRequest) return;
+    radioActive = false;
+    refreshRadio();
+    notice("This recording could not play. Choose another track in Bay FM.");
+  }
+}
+function toggleRadio() {
+  if (radioActive || !radio.paused) {
+    playRequest++;
+    radio.pause();
+    radioActive = false;
+    refreshRadio();
+  } else playSong(songIndex);
+}
+radio.addEventListener("ended", () => playSong(songIndex + 1));
+function renderRadio() {
+  const t = tracks[songIndex];
+  openDialog(
+    "radio",
+    "Bay FM",
+    '<div class="eyebrow">98.4 FM · Aurelia Bay</div><p class="radio-title">' +
+      t.title +
+      '</p><div class="subpage-note">' +
+      t.artist +
+      '</div><div class="transport">' +
+      btn(
+        "radio",
+        icon(radioActive ? "pause" : "play", 15) +
+          (radioActive ? "Pause" : "Play"),
+        "primary",
+      ) +
+      btn("radio-next", icon("skip", 16) + "Next") +
+      '</div><div class="radio-tracks">' +
+      tracks
+        .map(
+          (song, i) =>
+            '<button class="song ' +
+            (i === songIndex ? "on" : "") +
+            '" data-act="track:' +
+            i +
+            '" aria-label="Play ' +
+            song.title +
+            '">' +
+            icon(i === songIndex && radioActive ? "radio" : "music", 19) +
+            "<span><b>" +
+            song.title +
+            "</b><small>" +
+            song.artist +
+            "</small></span><em>" +
+            (song.license === "CC0-1.0" ? "CC0" : "Original") +
+            "</em></button>",
+        )
+        .join("") +
+      "</div>",
+  );
 }
 function getGarageCar() {
   return cars.find((c) => c.id === garageCar) || car();
@@ -575,6 +653,9 @@ async function garage() {
   shell(
     '<div class="title-row">' +
       heading("Garage") +
+      (returnPose
+        ? btn("drive", icon("wheel", 16) + " Drive out", "primary")
+        : "") +
       '<span class="subpage-note">' +
       profile.owned.length +
       " / " +
@@ -662,38 +743,57 @@ document.addEventListener("change", (e) => {
 let mapApi = null,
   mapCanvas = null,
   mapState = null;
+function mapCategories() {
+  return (
+    '<div class="tabs map-tabs" aria-label="Map destinations">' +
+    btn(
+      "map-category:places",
+      icon("pin", 15) + " Places",
+      mapCategory === "places" ? "on" : "",
+    ) +
+    btn(
+      "map-category:events",
+      icon("flag", 15) + " Events",
+      mapCategory === "events" ? "on" : "",
+    ) +
+    "</div>"
+  );
+}
+function mapList() {
+  return (mapCategory === "places" ? locations : activities)
+    .map(
+      (e) =>
+        '<button class="map-event ' +
+        (mapPick?.id === e.id ? "on" : "") +
+        '" style="--accent:' +
+        (e.color || "#ffba71") +
+        '" data-act="pick:' +
+        e.id +
+        '"><span class="map-list-icon">' +
+        icon(e.icon, 18) +
+        "</span><span><b>" +
+        e.name +
+        "</b><small>" +
+        e.place +
+        "</small></span>" +
+        icon("arrow", 14) +
+        "</button>",
+    )
+    .join("");
+}
 function mapBody() {
   return (
     '<div class="title-row">' +
     heading("World map") +
     (session
       ? btn("back-drive", icon("back", 15) + " Return to drive", "minor-btn")
-      : '<div class="session">' + icon("compass", 15) + " Aurelia Bay</div>") +
-    '</div><div class="workspace-grid"><div class="map-frame"><canvas id="world-map" aria-label="Aurelia Bay road map. Select a point to set a waypoint."></canvas><div class="map-compass">N</div><div class="canvas-caption">Select a marker or place a GPS waypoint</div></div><section class="work-panel"><div class="eyebrow">Radio dispatch</div><h2>District events</h2><p class="dialog-copy">' +
-    storyLine(events.filter((e) => profile.wins[e.id])) +
-    '</p><div class="map-events">' +
-    activities
-      .map(
-        (e) =>
-          '<button class="map-event ' +
-          (mapPick?.id === e.id ? "on" : "") +
-          '" style="--accent:' +
-          (e.color || "#ffba71") +
-          '" data-act="pick:' +
-          e.id +
-          '">' +
-          icon(e.icon, 21) +
-          "<span><b>" +
-          e.name +
-          "</b><small>" +
-          e.type +
-          " · " +
-          e.place +
-          "</small></span>" +
-          icon("arrow", 14) +
-          "</button>",
-      )
-      .join("") +
+      : '<span class="session">' + icon("compass", 15) + "Aurelia Bay</span>") +
+    '</div><div class="workspace-grid map-layout"><div class="map-frame"><canvas id="world-map" aria-label="Aurelia Bay map with home, garage, landmarks and events. Select a marker to set GPS."></canvas><div class="map-compass">N</div><div class="canvas-caption">' +
+    icon("pin", 13) +
+    ' Select a marker to set GPS</div></div><section class="work-panel"><div class="eyebrow">Aurelia Bay</div><h2>Destinations</h2><div id="map-categories">' +
+    mapCategories() +
+    '</div><div class="map-events" id="map-list">' +
+    mapList() +
     '</div><div id="map-selected"></div></section></div>'
   );
 }
@@ -712,6 +812,8 @@ function drawFullMap() {
 function updateMapSelection() {
   const region = document.querySelector("#map-selected");
   if (!region) return;
+  document.querySelector("#map-categories").innerHTML = mapCategories();
+  document.querySelector("#map-list").innerHTML = mapList();
   document
     .querySelectorAll(".map-event")
     .forEach((el) =>
@@ -723,12 +825,18 @@ function updateMapSelection() {
       '</div><p class="dialog-copy">' +
       mapPick.brief +
       '</p><div class="map-btns">' +
+      (mapPick.landmark
+        ? ""
+        : btn(
+            "launch:" + mapPick.id,
+            icon("flag", 15) + " Enter event",
+            "primary",
+          )) +
       btn(
-        "launch:" + mapPick.id,
-        icon("flag", 15) + " Enter event",
-        "primary",
+        "gps:" + mapPick.id,
+        icon("pin", 15) + " Set GPS",
+        mapPick.landmark ? "primary" : "secondary",
       ) +
-      btn("gps:" + mapPick.id, icon("pin", 15) + " Set GPS") +
       "</div>"
     : '<div class="eyebrow">Custom waypoint</div><p class="dialog-copy">GPS destination selected. Follow the amber marker to this location.</p>' +
       btn("gps-custom", "Drive to waypoint", "primary");
@@ -768,13 +876,13 @@ async function worldMap() {
     const b = mapCanvas.getBoundingClientRect(),
       x = e.clientX - b.left,
       y = e.clientY - b.top,
-      found = activities.find((ev) => {
-        const pos = w.routePoint(ev.road, startDistance(ev, w.roadLengths));
-        const q = mapState.point(pos.x, pos.z);
-        return Math.hypot(q[0] - x, q[1] - y) < 17;
-      });
+      found = mapState.markerHits
+        .map((hit) => ({ ...hit, distance: Math.hypot(hit.x - x, hit.y - y) }))
+        .filter((hit) => hit.distance < hit.r + 5)
+        .sort((a, b) => a.distance - b.distance)[0]?.item;
     if (found) {
       mapPick = found;
+      mapCategory = found.landmark ? "places" : "events";
       mapGps = null;
     } else {
       mapPick = null;
@@ -808,7 +916,7 @@ async function gps(e) {
   let p = mapGps;
   if (e) {
     const w = await import("./world.js");
-    p = w.routePoint(e.road, startDistance(e, w.roadLengths));
+    p = markerPoint(e, w.routePoint, w.roadLengths);
   }
   if (!p) return;
   closeDialog(false);
@@ -848,6 +956,7 @@ function hudMarkup() {
     "</button>";
   return (
     '<div class="drive"><div id="viewport" class="viewport"></div><div class="hud"><div class="hud-top"><div class="hud-block"><div class="eyebrow" id="race-type">Free roam</div><h2 id="race-name">Coastal Highway</h2><p id="race-progress"></p><p class="gps-readout" id="gps-readout"></p></div><div class="hud-ops">' +
+    iconBtn("radio-menu", "Bay FM radio", "radio") +
     iconBtn("map", "World map (M)", "map") +
     iconBtn("camera", "Change camera (C)", "camera") +
     iconBtn("pause", "Pause game", "pause") +
@@ -902,7 +1011,9 @@ function updateHud(p, m, wp, near, district) {
   h.countdown.textContent =
     m?.status === "intro" ? Math.max(1, Math.ceil(m.intro)) : "";
   h["near-event"].hidden = !near;
-  if (near) h["near-event"].textContent = "[ E ]  Enter " + near.name;
+  if (near)
+    h["near-event"].textContent =
+      "[ E ]  " + (near.landmark ? near.action : "Enter " + near.name);
   if (wp) {
     const distance = Math.hypot(p.x - wp.x, p.z - wp.z);
     const bearing = Math.atan2(-(wp.x - p.x), -(wp.z - p.z));
@@ -911,6 +1022,7 @@ function updateHud(p, m, wp, near, district) {
       Math.cos(bearing - p.heading),
     );
     h["gps-readout"].textContent =
+      (wp.name ? wp.name + " · " : "") +
       (Math.abs(delta) > 2.6
         ? "Turn around"
         : delta > 0.3
@@ -999,6 +1111,7 @@ async function launch(event = null) {
       {
         notice,
         radio: radioMessage,
+        visit: visitLocation,
         result,
         hud: updateHud,
         shockwave() {
@@ -1009,7 +1122,9 @@ async function launch(event = null) {
           notice("Nitro shockwave");
         },
       },
+      returnPose,
     );
+    returnPose = null;
     document.querySelector("#loading").remove();
     if (event) session.start(event);
     else
@@ -1038,6 +1153,52 @@ async function launch(event = null) {
     );
   } finally {
     launchBusy = false;
+  }
+}
+function visitLocation(item) {
+  if (!session) return;
+  const pose = {
+    x: session.p.x,
+    z: session.p.z,
+    height: session.p.y,
+    heading: session.p.heading,
+  };
+  if (item.id === "garage") {
+    returnPose = pose;
+    session.dispose();
+    session = null;
+    hudRefs = {};
+    clearTimeout(radioTimer);
+    garage();
+    return;
+  }
+  if (item.id === "home") {
+    profile.startAtHome = true;
+    persist();
+    session.p.speed = 0;
+    session.p.yawRate = 0;
+    session.graphics.controller.snap = true;
+    session.hooks.radio(
+      "Parked at home. Your next free-roam drive starts on the Promenade.",
+    );
+    return;
+  }
+  if (item.id === "harbour") {
+    session.pause(true);
+    eventDetail(activities.find((e) => e.id === "stunt"));
+    return;
+  }
+  if (item.id === "festival") {
+    mapCategory = "events";
+    mapPick = events[0];
+    worldMap();
+    return;
+  }
+  if (item.id === "lookout") {
+    session.p.speed = 0;
+    session.graphics.controller.index = 3;
+    session.graphics.controller.snap = true;
+    notice("Canyon Overlook · Cinematic camera");
   }
 }
 function leave() {
@@ -1104,12 +1265,19 @@ function action(name) {
       launch(activities.find((e) => e.id === id));
       break;
     case "pick":
-      mapPick = activities.find((e) => e.id === id);
+      mapPick = [...locations, ...activities].find((e) => e.id === id);
+      mapCategory = mapPick?.landmark ? "places" : "events";
+      mapGps = null;
+      updateMapSelection();
+      break;
+    case "map-category":
+      mapCategory = id;
+      mapPick = (id === "places" ? locations : activities)[0];
       mapGps = null;
       updateMapSelection();
       break;
     case "gps":
-      gps(activities.find((e) => e.id === id));
+      gps([...activities, ...locations].find((e) => e.id === id));
       break;
     case "gps-custom":
       gps(null);
@@ -1143,6 +1311,16 @@ function action(name) {
         session.headlights = !session.headlights;
         notice("Headlights " + (session.headlights ? "on" : "off"));
       }
+      break;
+    case "radio-menu":
+      if (session) session.pause(true);
+      renderRadio();
+      break;
+    case "radio-next":
+      playSong(songIndex + 1);
+      break;
+    case "track":
+      playSong(Number(id));
       break;
     case "radio":
       toggleRadio();

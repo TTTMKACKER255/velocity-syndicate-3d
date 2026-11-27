@@ -1,4 +1,11 @@
+import { markerPath } from "./marker-art.js";
 const paths = {
+  home: '<path d="' + markerPath("home") + '"/>',
+  anchor: '<path d="' + markerPath("anchor") + '"/>',
+  mountain: '<path d="' + markerPath("mountain") + '"/>',
+  skip: '<path d="m5 5 11 7-11 7zM19 5v14"/>',
+  music:
+    '<path d="M9 18V5l12-2v12M9 8l12-2"/><ellipse cx="6" cy="18" rx="3" ry="2"/><ellipse cx="18" cy="15" rx="3" ry="2"/>',
   wheel:
     '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="2"/><path d="m3.5 9 6.6 2M20.5 9l-6.6 2M12 14v6.5"/>',
   garage: '<path d="M3 20V8l9-5 9 5v12M6 20V10h12v10M6 13h12M6 16h12"/>',

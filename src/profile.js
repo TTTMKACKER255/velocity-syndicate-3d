@@ -101,6 +101,7 @@ export const baseLook = (car) => ({
 const key = "velocity-syndicate.profile.v1";
 const defaults = () => ({
   version: 1,
+  startAtHome: false,
   credits: 2500,
   rep: 0,
   repBalance: 0,
