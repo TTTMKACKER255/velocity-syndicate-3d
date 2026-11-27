@@ -1,0 +1,28 @@
+{
+  "slug": "velocity-syndicate-3d",
+  "title": "Velocity Syndicate",
+  "summary": "Race the coastal highways of Aurelia Bay, drift through the canyon and take on the syndicate in a seven-car, single-player campaign.",
+  "genres": ["Racing", "Driving"],
+  "tags": ["Single player", "Open world", "Drifting"],
+  "input": "Keyboard, standard gamepad or touch",
+  "releaseDate": "2026-11-27",
+  "buildDir": "web-export",
+  "entry": "index.html",
+  "mediaDir": "arcade-art",
+  "cover": "cover.webp",
+  "coverAlt": "A silver sports coupe with a rear wing overlooks the bay from a mountain road.",
+  "source": { "repository": "TTTMKACKER255/velocity-syndicate-3d" },
+  "controls": [
+    ["Accelerate / brake", "W / S or RT / LT"],
+    ["Steer", "A / D or left stick"],
+    ["Drift", "Space or B"],
+    ["Nitro", "Shift or A"],
+    ["Change camera", "C or Y"],
+    ["Open map", "M or View"]
+  ],
+  "launchTest": {
+    "ready": "button[data-act='drive']",
+    "start": "button[data-act='drive']",
+    "started": "#race-name"
+  }
+}

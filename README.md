@@ -21,6 +21,10 @@ python3 -m http.server 8080 --directory dist
 
 Open `http://localhost:8080` to play the production build. Any static host that preserves the contents of `dist/` can serve it. The source repository ZIP contains an ordinary working checkout and its commit history. Extract the ZIP before running commands.
 
+### Vortex Arcade release
+
+Run `npm run build:arcade` after changing the game. Commit the refreshed `web-export/` and `arcade-art/` alongside the root `arcade.game.json`. Arcade reads those files directly from the selected Git commit. Push the commit, select its branch on the Arcade submission page and choose **Check release**.
+
 ## Driving and controls
 
 | Action | Keyboard | Standard gamepad |

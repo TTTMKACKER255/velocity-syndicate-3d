@@ -6,6 +6,7 @@
   "description": "An open-world driving game set in Aurelia Bay",
   "scripts": {
     "build": "node scripts/build.mjs",
+    "build:arcade": "node scripts/build.mjs --arcade",
     "test": "node --test scripts/*.test.mjs",
     "dev": "vite --host 0.0.0.0"
   },
