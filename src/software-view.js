@@ -284,12 +284,26 @@ function scenery(group) {
       const element = plane(
         v,
         color.getHex(),
-        i === 4 ? 3 : i === 3 ? 1 : i === 2 ? 2 : 4,
+        o.name === "Forecourt paving"
+          ? 1
+          : i === 4
+            ? 3
+            : i === 3
+              ? 1
+              : i === 2
+                ? 2
+                : 4,
       );
       const asphalt = o.name === "Wet asphalt",
         paint = o.name === "Road markings",
         works = o.name === "Road service details";
-      if (asphalt || o.name === "Stone paving" || paint || works) {
+      if (
+        asphalt ||
+        o.name === "Stone paving" ||
+        o.name === "Forecourt paving" ||
+        paint ||
+        works
+      ) {
         const uv = o.geometry.attributes.uv;
         element.tex = asphalt
           ? "asphalt"
@@ -1472,7 +1486,39 @@ export function createSoftwareView(canvas, look = {}, worldGroup) {
       projected,
     );
     const visibleItems = [];
+    // A sloping chase camera sees only a few floors of the closest towers.
+    // Test the actual bounds against the four side planes before sorting parts.
+    const clipPlanes = [];
+    for (const sign of [-1, 1]) {
+      const sx = w / (2 * f),
+        sy = h / (2 * f);
+      clipPlanes.push([
+        sx * ahead.x + sign * right.x,
+        sx * ahead.y,
+        sx * ahead.z + sign * right.z,
+      ]);
+      clipPlanes.push([
+        sy * ahead.x + sign * up.x,
+        sy * ahead.y + sign * up.y,
+        sy * ahead.z + sign * up.z,
+      ]);
+    }
+    function inView(x, y, z, width, height, span) {
+      const dx = x - eye.x,
+        dy = y - eye.y,
+        dz = z - eye.z;
+      for (const [a, b, c] of clipPlanes) {
+        if (
+          a * dx + b * dy + c * dz <
+          -0.5 *
+            (Math.abs(a) * width + Math.abs(b) * height + Math.abs(c) * span)
+        )
+          return false;
+      }
+      return true;
+    }
     const interiorView = {
+      inView,
       visible,
       depth,
       time: clock,

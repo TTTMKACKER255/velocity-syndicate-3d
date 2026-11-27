@@ -1,8 +1,16 @@
+import { createRoadNavigator } from "../src/navigation.js";
 import { roads, routePoint, roadLengths, groundHeight } from "../src/world.js";
 import { locations, markerPoint } from "../src/locations.js";
 import { drawMarker } from "./marker-art.js";
 const bounds = { x: -1390, z: -1310, w: 2040, h: 2490 };
-let atlas;
+let atlas, navigator;
+export function roadDirections(start, goal) {
+  navigator ??= createRoadNavigator(
+    roads,
+    (road, station) => routePoint(road, station).height,
+  );
+  return navigator(start, goal);
+}
 function makeAtlas() {
   if (atlas) return atlas;
   atlas = document.createElement("canvas");
@@ -54,6 +62,7 @@ export function drawMap(
   {
     player,
     waypoint,
+    directions,
     events = [],
     local = false,
     scale = 1,
@@ -130,8 +139,13 @@ export function drawMap(
     c.strokeStyle = "#ff994e";
     c.setLineDash([4, 5]);
     c.beginPath();
-    c.moveTo(...pt(player.x, player.z));
-    c.lineTo(x, y);
+    const route =
+      directions === undefined ? roadDirections(player, waypoint) : directions;
+    for (const [i, p] of (route?.points || []).entries()) {
+      const xy = pt(p.x, p.z);
+      if (i === 0) c.moveTo(...xy);
+      else c.lineTo(...xy);
+    }
     c.stroke();
     c.setLineDash([]);
     c.beginPath();

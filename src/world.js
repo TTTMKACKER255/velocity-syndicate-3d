@@ -2,10 +2,11 @@
 import * as THREE from "three";
 import { createArchitecture } from "./architecture.js";
 import { streetlightPower } from "./daylight.js";
+import { pavementIndex, clippedQuads } from "./junctions.js";
 import { recordStreetlight } from "./streetlights.js";
 import { aggregateMetres } from "./road-materials-art.js";
 import { roadMaterial, paintMaterial, roadDetails } from "./road-materials.js";
-import { architectureMaterial, textureFor } from "./environment-materials.js";
+import { textureFor } from "./environment-materials.js";
 
 import { createVegetation, meadowMaterial } from "./vegetation.js";
 
@@ -563,14 +564,13 @@ function roadCorner(s, d, height) {
     z = s.z - Math.sin(s.heading) * d;
   return [x, groundHeight(x, z) + (s.elevation || 0) + height, z];
 }
-function routeStrip(builder, p, q, left, right, height, color) {
-  builder.quad(
-    roadCorner(p, left, height),
-    roadCorner(p, right, height),
-    roadCorner(q, right, height),
-    roadCorner(q, left, height),
-    color,
-  );
+function stripCorners(p, q, left, right, lift) {
+  return [
+    roadCorner(p, left, lift),
+    roadCorner(p, right, lift),
+    roadCorner(q, right, lift),
+    roadCorner(q, left, lift),
+  ];
 }
 function makeRoads(root) {
   const asphalt = stripBuilder(),
@@ -583,13 +583,16 @@ function makeRoads(root) {
     lines = stripBuilder();
   const wear = new THREE.Color(),
     sidewalk = new THREE.Color("#b9b6aa"),
-    shoulder = new THREE.Color("#ad9a78");
+    shoulder = new THREE.Color("#ad9a78"),
+    kerbFace = new THREE.Color("#8b897e"),
+    kerbTop = new THREE.Color("#d5d1c2");
   const white = new THREE.Color("#ffffff"),
     yellow = new THREE.Color("#ffcd5f");
+  const step = 5.2,
+    spans = [];
   roads.forEach((rd, i) => {
     const length = roadLengths[i],
       half = rd.width / 2,
-      step = 5.2,
       h = 0.19 + i * 0.006;
     const endpoint = (d) => {
       const p = routePoint(i, Math.min(d, length - 0.001));
@@ -597,112 +600,114 @@ function makeRoads(root) {
       return p;
     };
     for (let d = 0; d < length; d += step) {
-      const p = endpoint(d),
-        q = endpoint(d + step),
-        mid = endpoint(d + step * 0.5);
-      const corners = [
-        roadCorner(p, -half, h),
-        roadCorner(p, half, h),
-        roadCorner(q, half, h),
-        roadCorner(q, -half, h),
-      ];
-      const patina =
-        (i === 1 || i === 11 ? 1.12 : i === 2 || i === 10 ? 0.8 : 0.98) +
-        0.095 * Math.sin(d * 0.036 + i) +
-        0.07 * Math.cos(d * 0.079);
-      wear.setRGB(
-        patina,
-        patina * (i === 1 ? 0.97 : 1),
-        patina * (i === 1 ? 0.9 : 1.014),
-      );
-      asphalt.quad(...corners, wear);
-      const nextD = Math.min(length, d + step),
-        v0 = d / 55,
-        v1 = nextD / 55;
-      roadUV.push(0, v0, 1, v0, 1, v1, 0, v1);
-      const u1 = rd.width / aggregateMetres,
-        ta = d / aggregateMetres,
-        tb = nextD / aggregateMetres;
-      aggregateUV.push(0, ta, u1, ta, u1, tb, 0, tb);
-      if (mid.elevation < 1 && roadAt(mid.x, mid.z, 1, i, true)) continue;
-      details.populate(corners, i, d, nextD - d, rd.width);
-      const stripe = (left, right, lift, col) => {
-        routeStrip(lines, p, q, left, right, h + lift, col);
-        const va = d / 1.15,
-          vb = nextD / 1.15;
-        paintUV.push(0, va, 1, va, 1, vb, 0, vb);
-      };
-      const walk = i === expressway ? 0.65 : i === 1 || i === 11 ? 1.3 : 2.6;
-      for (const s of [-1, 1]) {
-        routeStrip(
-          stone,
-          p,
-          q,
-          s * half,
-          s * (half + walk),
-          h + 0.14,
-          i === 1 || i === 11 ? shoulder : sidewalk,
-        );
-        stripe(s * (half - 0.68), s * (half - 0.51), 0.024, white);
-        pavingUV.push(
-          0,
-          d / 6.4,
-          walk / 6.4,
-          d / 6.4,
-          walk / 6.4,
-          nextD / 6.4,
-          0,
-          nextD / 6.4,
-        );
-        if (i !== 1 && i !== 11) {
-          // A kerb stone has its own top bevel and raised face.
-          const edge = (r, t, y) => {
-            const x = r.x + Math.cos(r.heading) * t,
-              z = r.z - Math.sin(r.heading) * t;
-            return [x, groundHeight(x, z) + (r.elevation || 0) + y, z];
-          };
-          const outside = s * (half + 0.19),
-            inside = s * (half - 0.035);
-          stone.quad(
-            edge(p, inside, h + 0.035),
-            edge(q, inside, h + 0.035),
-            edge(q, s * half, h + 0.16),
-            edge(p, s * half, h + 0.16),
-            new THREE.Color("#8b897e"),
-          );
-          stone.quad(
-            edge(p, s * half, h + 0.16),
-            edge(q, s * half, h + 0.16),
-            edge(q, outside, h + 0.14),
-            edge(p, outside, h + 0.14),
-            new THREE.Color("#d5d1c2"),
-          );
-          pavingUV.push(
-            0,
-            d / 6.4,
-            0,
-            nextD / 6.4,
-            0.05,
-            nextD / 6.4,
-            0.05,
-            d / 6.4,
-            0,
-            d / 6.4,
-            0,
-            nextD / 6.4,
-            0.05,
-            nextD / 6.4,
-            0.05,
-            d / 6.4,
-          );
-        }
-        if (rd.width >= 18 && Math.floor(d / step) % 3 === 0)
-          stripe(s * (half * 0.5 - 0.07), s * (half * 0.5 + 0.07), 0.03, white);
-      }
-      stripe(-0.21, -0.075, 0.03, yellow);
-      stripe(0.075, 0.21, 0.03, yellow);
+      const nextD = Math.min(d + step, length),
+        p = endpoint(d),
+        q = endpoint(nextD);
+      spans.push({
+        road: i,
+        d,
+        nextD,
+        p,
+        q,
+        h,
+        elevation: (p.elevation + q.elevation) * 0.5,
+        corners: stripCorners(p, q, -half, half, h),
+      });
     }
   });
+  const crossings = pavementIndex(spans);
+  for (const { road: i, d, nextD, p, q, h, elevation, corners } of spans) {
+    const rd = roads[i],
+      half = rd.width / 2;
+    const patina =
+      (i === 1 || i === 11 ? 1.12 : i === 2 || i === 10 ? 0.8 : 0.98) +
+      0.095 * Math.sin(d * 0.036 + i) +
+      0.07 * Math.cos(d * 0.079);
+    wear.setRGB(
+      patina,
+      patina * (i === 1 ? 0.97 : 1),
+      patina * (i === 1 ? 0.9 : 1.014),
+    );
+    asphalt.quad(...corners, wear);
+    const v0 = d / 55,
+      v1 = nextD / 55;
+    roadUV.push(0, v0, 1, v0, 1, v1, 0, v1);
+    const u1 = rd.width / aggregateMetres,
+      ta = d / aggregateMetres,
+      tb = nextD / aggregateMetres;
+    aggregateUV.push(0, ta, u1, ta, u1, tb, 0, tb);
+    const walk = i === expressway ? 0.65 : i === 1 || i === 11 ? 1.3 : 2.6;
+    const cuts = crossings(
+      stripCorners(p, q, -half - walk, half + walk, h),
+      i,
+      elevation,
+    );
+    if (!cuts.length) details.populate(corners, i, d, nextD - d, rd.width);
+    const piece = (builder, uvArray, corners, uv, color) => {
+      clippedQuads(corners, uv, cuts, (quad, tex) => {
+        builder.quad(...quad, color);
+        uvArray.push(...tex);
+      });
+    };
+    function stripe(left, right, lift, col) {
+      const a = d / 1.15,
+        b = nextD / 1.15;
+      piece(
+        lines,
+        paintUV,
+        stripCorners(p, q, left, right, h + lift),
+        [0, a, 1, a, 1, b, 0, b],
+        col,
+      );
+    }
+    for (const s of [-1, 1]) {
+      const a = d / 6.4,
+        b = nextD / 6.4,
+        width = walk / 6.4;
+      piece(
+        stone,
+        pavingUV,
+        stripCorners(p, q, s * half, s * (half + walk), h + 0.14),
+        [0, a, width, a, width, b, 0, b],
+        i === 1 || i === 11 ? shoulder : sidewalk,
+      );
+      stripe(s * (half - 0.68), s * (half - 0.51), 0.024, white);
+      if (i !== 1 && i !== 11) {
+        const outside = s * (half + 0.19),
+          inside = s * (half - 0.035),
+          crest = s * half;
+        const kerbUv = [0, a, 0, b, 0.05, b, 0.05, a];
+        piece(
+          stone,
+          pavingUV,
+          [
+            roadCorner(p, inside, h + 0.035),
+            roadCorner(q, inside, h + 0.035),
+            roadCorner(q, crest, h + 0.16),
+            roadCorner(p, crest, h + 0.16),
+          ],
+          kerbUv,
+          kerbFace,
+        );
+        piece(
+          stone,
+          pavingUV,
+          [
+            roadCorner(p, crest, h + 0.16),
+            roadCorner(q, crest, h + 0.16),
+            roadCorner(q, outside, h + 0.14),
+            roadCorner(p, outside, h + 0.14),
+          ],
+          kerbUv,
+          kerbTop,
+        );
+      }
+      if (rd.width >= 18 && Math.floor(d / step) % 3 === 0)
+        stripe(s * (half * 0.5 - 0.07), s * (half * 0.5 + 0.07), 0.03, white);
+    }
+    stripe(-0.21, -0.075, 0.03, yellow);
+    stripe(0.075, 0.21, 0.03, yellow);
+  }
   const roadMat = roadMaterial();
   const roadGeo = asphalt.finish();
   roadGeo.setAttribute("uv", new THREE.Float32BufferAttribute(roadUV, 2));
@@ -729,6 +734,7 @@ function makeRoads(root) {
   markings.name = "Road markings";
   markings.receiveShadow = true;
   root.add(markings, details.finish());
+  return crossings;
 }
 
 const rotation = new THREE.Euler(),
@@ -838,18 +844,32 @@ function createSign(
   mesh.rotation.y = heading;
   root.add(mesh);
 }
-function createScenery(root, night) {
+function createScenery(root, crossings) {
+  const plazas = stripBuilder(),
+    plazaUV = [];
+  function forecourt(x, z, w, d, color) {
+    const corners = [
+      [-1, -1],
+      [1, -1],
+      [1, 1],
+      [-1, 1],
+    ].map(([i, j]) => {
+      const px = x + w * 0.5 * i,
+        pz = z + d * 0.5 * j;
+      return [px, groundHeight(px, pz) + 0.12, pz];
+    });
+    const uv = corners.flatMap(([px, , pz]) => [px / 6.4, pz / 6.4]);
+    const tint = new THREE.Color(color);
+    clippedQuads(corners, uv, crossings(corners, -1, 0), (quad, tex) => {
+      plazas.quad(...quad, tint);
+      plazaUV.push(...tex);
+    });
+  }
   const architecture = createArchitecture(root);
   const rng = randomSource(671041),
     batches = makeBatches(root);
   const box = new THREE.BoxGeometry(),
     blocks = batches.create(box);
-  const buildings = Object.fromEntries(
-    ["glass", "residence", "brick", "limestone"].map((name) => [
-      name,
-      batches.create(box.clone(), architectureMaterial(name, night), true),
-    ]),
-  );
   const posts = batches.create(new THREE.CylinderGeometry(0.5, 0.5, 1, 7));
   const boulder = batches.create(
     new THREE.IcosahedronGeometry(1, 0),
@@ -898,8 +918,9 @@ function createScenery(root, night) {
     y = groundHeight(x, z),
     h = 20,
     smash = null,
+    material = "concrete",
   ) {
-    const record = { x, z, rx, rz, y, h, smash };
+    const record = { x, z, rx, rz, y, h, smash, material };
     const pad = smash?.tree ? 2.52 : 2;
     indexBounds(
       collisions,
@@ -988,7 +1009,6 @@ function createScenery(root, night) {
               : Math.floor(Math.abs(cx + cz)) % 3 === 0
                 ? "limestone"
                 : "glass";
-      const facade = buildings[style];
       const seed = Math.floor(Math.abs(cx * 17 + cz * 9));
       const podium = Math.min(4.6, Math.max(3.05, h * 0.24));
       architecture.add({
@@ -1021,10 +1041,16 @@ function createScenery(root, night) {
           upper: true,
         });
       const upperBase = podium + galleryHeight;
-      facade.add(
-        transform(cx, base + (h + upperBase) * 0.5, cz, w, h - upperBase, d),
-        "#fcfbf3",
-      );
+      architecture.addStoreys({
+        x: cx,
+        y: base + upperBase,
+        z: cz,
+        w,
+        d,
+        h: h - upperBase,
+        style,
+        seed,
+      });
       blocks.add(
         transform(cx, base + h + 0.42, cz, w + 0.6, 0.84, d + 0.6),
         h > 39 ? glaze : tone,
@@ -1047,17 +1073,16 @@ function createScenery(root, night) {
               );
         }
         const crown = h * (0.09 + rng() * 0.21);
-        facade.add(
-          transform(
-            cx,
-            base + h + 0.7 + crown / 2,
-            cz,
-            w * 0.77,
-            crown,
-            d * 0.84,
-          ),
-          "#f0f4f4",
-        );
+        architecture.addStoreys({
+          x: cx,
+          y: base + h + 0.7,
+          z: cz,
+          w: w * 0.77,
+          d: d * 0.84,
+          h: crown,
+          style,
+          seed: seed + 1,
+        });
         blocks.add(
           transform(cx, base + h + crown + 1, cz, w * 0.8, 1, d * 0.86),
           tone,
@@ -1080,20 +1105,14 @@ function createScenery(root, night) {
               ),
               tone,
             );
-      } else if (h > 13) {
-        for (let y = 7.5; y < h; y += 5.3)
-          blocks.add(transform(cx, base + y, cz, w + 1.3, 0.45, d + 1.3), tone);
-      } else {
+      } else if (h <= 13) {
         blocks.add(
           transform(cx + 2, base + h + 1.1, cz - 1, w * 0.23, 1.3, d * 0.21),
           "#777d80",
         );
       }
       // Paving and narrow landscaped setbacks connect the shops to the public sidewalk.
-      blocks.add(
-        transform(cx, base + 0.03, cz, w + 6.8, 0.12, d + 6.4),
-        "#a59e8c",
-      );
+      forecourt(cx, cz, w + 6.8, d + 6.4, "#a59e8c");
       if (h > 22)
         for (const side of [-1, 1]) {
           blocks.add(
@@ -1151,10 +1170,16 @@ function createScenery(root, night) {
         seed: 133,
         upper: true,
       });
-      buildings[v.upper].add(
-        transform(x, y + h + 4.21, z, w - 0.6, 2.58, d - 1.0),
-        "#fff8e8",
-      );
+      architecture.addStoreys({
+        x,
+        y: y + h + 2.92,
+        z,
+        w: w - 0.6,
+        d: d - 1,
+        h: 2.58,
+        style: v.upper,
+        seed: 134,
+      });
       blocks.add(transform(x, y + h + 5.7, z, w, 0.35, d - 0.4), "#c4b9a0");
     }
     const face = x + w * 0.5;
@@ -1163,10 +1188,7 @@ function createScenery(root, night) {
       v.upper ? "#baab91" : "#3e4748",
     );
     // The forecourt reaches the shoulder, leaving the marker and entrance clear.
-    blocks.add(
-      transform(face + 3.2, y + 0.06, z, 6.35, 0.12, d * 0.85),
-      "#a5a29a",
-    );
+    forecourt(face + 3.2, z, 6.35, d * 0.85, "#a5a29a");
     for (const end of [-1, 1])
       blocks.add(
         transform(face + 1.3, y + 0.53, z + d * 0.46 * end, 0.72, 1.06, 0.72),
@@ -1231,7 +1253,7 @@ function createScenery(root, night) {
     ];
     const obj = { alive: true, parts, x, z };
     recordStreetlight(streetlamps, obj, y, dx, dz, groundHeight);
-    solid(x, z, 0.28, 0.28, y, h, obj);
+    solid(x, z, 0.28, 0.28, y, h, obj, "car");
   }
   function barrier(x, z, a, y = groundHeight(x, z)) {
     const parts = [
@@ -1428,7 +1450,7 @@ function createScenery(root, night) {
         stack = rng() > 0.55 ? 2 : 1;
       for (let n = 0; n < stack; n++)
         container(x, y + n * 2.6, z, a, containerColors[Math.floor(rng() * 6)]);
-      solid(x, z, a ? 5.7 : 1.45, a ? 1.45 : 5.7, y, 2.6 * stack);
+      solid(x, z, a ? 5.7 : 1.45, a ? 1.45 : 5.7, y, 2.6 * stack, null, "car");
     }
   for (let j = 0; j < 4; j++) {
     const x = coastX(-710 - j * 72) - 31,
@@ -1810,8 +1832,19 @@ function createScenery(root, night) {
     const prop = { alive: true, parts, x, z, boardId: i + "/" + station };
     prop.original = parts.map(([batch, id]) => batch.items[id].matrix.clone());
     trialBoards.set(prop.boardId, prop);
-    solid(x, z, 1.65, 1.65, y, 2.8, prop);
+    solid(x, z, 1.65, 1.65, y, 2.8, prop, "glass");
   }
+  const plazaGeometry = plazas.finish();
+  plazaGeometry.setAttribute(
+    "uv",
+    new THREE.Float32BufferAttribute(plazaUV, 2),
+  );
+  const plazaMesh = new THREE.Mesh(
+    plazaGeometry,
+    root.getObjectByName("Stone paving").material,
+  );
+  plazaMesh.name = "Forecourt paving";
+  root.add(plazaMesh);
   architecture.bake();
   batches.finish();
   root.userData.trees = forest;
@@ -1866,6 +1899,7 @@ function createScenery(root, night) {
       tree = null,
       boardId = null;
     const py = p.y ?? groundHeight(p.x, p.z);
+    let material = null;
     let solidHit = shoreDepth(p.x, p.z) < -3 && py < 2;
     for (const item of collisions.get(key(p.x, p.z)) || empty) {
       if (py > item.y + item.h + 0.35 || py < item.y - 2) continue;
@@ -1885,6 +1919,7 @@ function createScenery(root, night) {
         if (ex * ex + ez * ez > item.rx * item.rx) continue;
         tree = { x: hit.x, z: hit.z };
         if (Math.abs(p.speed || 0) < 7) {
+          material = "wood";
           solidHit = true;
           continue;
         }
@@ -1905,6 +1940,7 @@ function createScenery(root, night) {
         continue;
       if (item.smash) {
         if (!item.smash.alive) continue;
+        material = item.material;
         item.smash.alive = false;
         boardId = item.smash.boardId || boardId;
         for (const [batch, id] of item.smash.parts) {
@@ -1912,9 +1948,12 @@ function createScenery(root, night) {
           batch.mesh.instanceMatrix.needsUpdate = true;
         }
         smashed++;
-      } else solidHit = true;
+      } else {
+        material ??= item.material;
+        solidHit = true;
+      }
     }
-    return { solid: solidHit, smashed, boardId, trees, tree };
+    return { solid: solidHit, smashed, boardId, trees, tree, material };
   }
   function surface(x, z, vehicleY) {
     const terrain = groundHeight(x, z),
@@ -1983,9 +2022,9 @@ export function createWorld(scene) {
   scene.add(root);
   const night = { value: 0 };
   makeTerrain(root);
-  makeRoads(root);
+  const crossings = makeRoads(root);
   const ocean = makeOcean(root),
-    scenery = createScenery(root, night);
+    scenery = createScenery(root, crossings);
   return {
     group: root,
     trees: scenery.trees,

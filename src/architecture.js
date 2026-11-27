@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { upperStoreys } from "./upper-storeys.js";
 
 // Transparent elevations and their opaque interiors share the same world-space
 // records. In the Canvas renderer each pane participates in the street's depth
@@ -455,7 +456,7 @@ export function createArchitecture(root) {
     mesh.name = name;
     parts.forEach((part, i) => {
       mesh.setMatrixAt(i, transformPart(part));
-      if (part.type !== "pane") mesh.setColorAt(i, color.setHex(part.c));
+      mesh.setColorAt(i, color.setHex(part.c));
     });
     mesh.computeBoundingSphere();
     parent.add(mesh);
@@ -539,6 +540,11 @@ export function createArchitecture(root) {
       rooms.push(room);
       return room;
     },
+    addStoreys(spec) {
+      const shell = upperStoreys(spec);
+      rooms.push(shell);
+      return shell;
+    },
     bake,
     update,
     rooms,
@@ -548,14 +554,38 @@ export function createArchitecture(root) {
 export function queueArchitecture(queue, rooms, view) {
   const { visible, depth, time } = view;
   for (const room of rooms || []) {
-    if (!visible(room.x, room.z, Math.max(room.w, room.d) * 0.7, 510)) continue;
+    if (
+      !visible(
+        room.x,
+        room.z,
+        Math.max(room.w, room.d) * 0.7,
+        room.levels ? 900 : 510,
+      )
+    )
+      continue;
+    if (
+      view.inView &&
+      !view.inView(
+        room.x,
+        room.y + room.h * 0.5,
+        room.z,
+        room.w + 2,
+        room.h + 1,
+        room.d + 2,
+      )
+    )
+      continue;
     const roomDepth = depth(room.x, room.y + room.h * 0.5, room.z);
     for (const part of room.props) {
       if (roomDepth > part.range) continue;
       const d = depth(part.x, part.y, part.z);
       const radius = Math.hypot(part.w, part.h, part.d) * 0.5;
       if (d + radius < 0.32) continue;
-      if (!visible(part.x, part.z, radius, part.range)) continue;
+      if (
+        view.inView &&
+        !view.inView(part.x, part.y, part.z, part.w, part.h, part.d)
+      )
+        continue;
       if (view.f && d > radius + 1) {
         // Subpixel fasteners and far mullions cannot cover a whole pixel.
         // The second-largest dimension measures projected thickness while
@@ -591,7 +621,15 @@ export function paintArchitecture(part, d, view) {
         [x + hw, y + hh, z + hd],
         [x - hw, y + hh, z - hd],
       ],
-      "rgba(130,182,189," + (0.105 + night * 0.05) + ")",
+      "rgba(" +
+        (part.c >> 16) +
+        "," +
+        ((part.c >> 8) & 255) +
+        "," +
+        (part.c & 255) +
+        "," +
+        (0.135 + night * 0.035) +
+        ")",
     );
     return;
   }
