@@ -1,9 +1,20 @@
 import * as THREE from "three";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 import { createVehicle } from "../models/vehicle.js";
+import { createTrafficModel, disposeTrafficModel } from "../models/traffic.js";
+import { applyPanelDent, clearPanelDents } from "../models/damage.js";
+import {
+  advanceTraffic,
+  collideTraffic,
+  lanePose,
+  localContact,
+  trafficBody,
+} from "./traffic-physics.js";
 import { DrivingCamera } from "./camera.js";
 import { createWorld, routePoint, groundHeight, roadLengths } from "./world.js";
 import { createSoftwareView } from "./software-view.js";
+import { DriftMarks } from "./skidmarks.js";
+import { RoadBeacons } from "./beacons.js";
 import { DriveEffects } from "./postfx.js";
 
 const skyVertex =
@@ -15,48 +26,6 @@ void main(){vec3 d=normalize(ray);float h=max(0.,d.y);vec3 day=mix(vec3(.83,.84,
 vec2 uv=d.xz/max(.08,d.y)*2.6+clock*.006;float clouds=noise(uv)*.54+noise(uv*2.1)*.29+noise(uv*4.7)*.17;day=mix(day,vec3(.97,.94,.84),smoothstep(.56,.73,clouds)*.53*smoothstep(.02,.17,h));
 float sun=max(0.,dot(d,normalize(vec3(-.44,.49,-.74))));day+=vec3(1.,.75,.41)*(pow(sun,35.)*.29+smoothstep(.9990,.9998,sun));
 vec3 dusk=mix(vec3(.16,.17,.23),vec3(.012,.024,.061),pow(h,.55));float star=step(.998,hash(floor(d.xz/max(.1,h)*380.)))*smoothstep(.1,.5,h);gl_FragColor=vec4(mix(day,dusk+star*.65,night),1.);}`;
-function trafficCar(color) {
-  const g = new THREE.Group();
-  const mat = (c, m = 0) =>
-    new THREE.MeshStandardMaterial({ color: c, metalness: m, roughness: 0.42 });
-  const body = mat(color, 0.35),
-    glass = mat(0x23303a, 0.55),
-    tire = mat(0x161a1c),
-    rim = mat(0xa9acad, 0.65);
-  function box(w, h, d, x, y, z, m) {
-    const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m);
-    mesh.position.set(x, y, z);
-    g.add(mesh);
-    return mesh;
-  }
-  box(1.85, 0.6, 4.15, 0, 0.52, 0, body);
-  box(1.55, 0.54, 2.1, 0, 1.05, 0.14, glass);
-  box(1.46, 0.1, 1.64, 0, 1.34, 0.16, body);
-  for (const x of [-0.91, 0.91])
-    for (const z of [-1.27, 1.27]) {
-      const wheel = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.34, 0.34, 0.17, 12),
-        tire,
-      );
-      wheel.rotation.z = Math.PI / 2;
-      wheel.position.set(x, 0.34, z);
-      g.add(wheel);
-      const hub = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.21, 0.21, 0.18, 10),
-        rim,
-      );
-      hub.rotation.z = Math.PI / 2;
-      hub.position.copy(wheel.position);
-      g.add(hub);
-    }
-  const red = new THREE.MeshBasicMaterial({ color: 0xff4329 }),
-    white = new THREE.MeshBasicMaterial({ color: 0xffeac5 });
-  for (const x of [-0.68, 0.68]) {
-    box(0.37, 0.12, 0.05, x, 0.68, 2.09, red);
-    box(0.4, 0.13, 0.05, x, 0.68, -2.09, white);
-  }
-  return g;
-}
 function place(obj, point, offset = 0) {
   obj.position.set(
     point.x + Math.cos(point.heading) * offset,
@@ -242,21 +211,27 @@ export class RaceGraphics {
       this.shadow.rotation.x = -Math.PI / 2;
       s.add(this.shadow);
     }
+    this.playerBody = this.car?.group ?? new THREE.Group();
+    this.playerBody.userData.body = look.body;
+    const palette = [
+      0x46586a, 0x77958e, 0xd3ccc0, 0x913a32, 0x355765, 0xb4a684, 0x727388,
+    ];
     this.traffic = Array.from({ length: 18 }, (_, i) => {
-      const mesh = trafficCar(
-        [0x655a48, 0x758995, 0xb6b8a7, 0x842e26, 0x225961][i % 5],
-      );
-      s.add(mesh);
       const road = i < 9 ? 0 : i < 12 ? 1 : i < 15 ? 2 : i - 12;
-      return {
-        mesh,
-        road,
-        dist: roadLengths[road] * ((i * 0.181 + 0.13) % 1),
-        speed: 9 + (i % 6) * 2,
-      };
+      const dist = roadLengths[road] * ((i * 0.181 + 0.13) % 1);
+      const mesh = createTrafficModel(palette[i % palette.length], i % 7);
+      const body = trafficBody(
+        lanePose(routePoint(road, dist)),
+        1320 + (i % 5) * 115,
+        mesh.userData,
+      );
+      mesh.position.set(body.x, body.y, body.z);
+      mesh.rotation.y = body.heading;
+      s.add(mesh);
+      return { mesh, body, road, dist, speed: 9 + (i % 6) * 2 };
     });
-    this.rival = trafficCar(0xb83228);
-    this.interceptor = trafficCar(0x222b37);
+    this.rival = createTrafficModel(0xb83228, "hyper");
+    this.interceptor = createTrafficModel(0x222b37, "gt");
     const lightbar = new THREE.Mesh(
       new THREE.BoxGeometry(0.95, 0.13, 0.28),
       new THREE.MeshBasicMaterial({ color: 0x338aff }),
@@ -285,23 +260,13 @@ export class RaceGraphics {
       mesh.visible = !profile.parts.includes(i);
       return { id: i, mesh };
     });
-    this.beacons = activities.map((e) => {
-      const b = new THREE.Mesh(
-        new THREE.OctahedronGeometry(1.45),
-        new THREE.MeshBasicMaterial({
-          color: e.color || 0xff932f,
-          wireframe: true,
-        }),
-      );
-      const point = routePoint(
-        e.road,
-        e.start ?? e.startRatio * roadLengths[e.road],
-      );
-      place(b, point);
-      b.position.y += 5;
-      s.add(b);
-      return b;
-    });
+    this.beacons = new RoadBeacons(this.renderer ? s : null, activities);
+    this.marks = new DriftMarks(
+      this.renderer ? s : null,
+      this.world.surface,
+      look,
+    );
+    this.overlays = { marks: this.marks, beacons: this.beacons };
     this.fallbackTraffic = [
       ...this.traffic,
       { mesh: this.rival },
@@ -350,71 +315,105 @@ export class RaceGraphics {
     }
   }
   resetEncounter(p) {
+    this.marks.breakTrail();
+    p.dents = this.playerBody.userData.dents || [];
+    for (const a of this.traffic) a.body.touching = false;
     this.trail = [{ x: p.x, y: p.y, z: p.z }];
-    this.interceptor.position.set(
-      p.x + Math.sin(p.heading) * 35,
-      p.y,
-      p.z + Math.cos(p.heading) * 35,
+    this.chaseTarget = {
+      x: p.x + Math.sin(p.heading) * 35,
+      y: p.y,
+      z: p.z + Math.cos(p.heading) * 35,
+      heading: p.heading,
+    };
+    this.rivalBody = null;
+    this.pursuitBody = trafficBody(
+      this.chaseTarget,
+      1770,
+      this.interceptor.userData,
     );
     this.controller.snap = true;
   }
-  advance(dt, p, mission, start, waypoint, onCollect) {
-    this.time += dt;
-    const t = this.time;
-    let hit = false;
-    for (const a of this.traffic) {
-      a.dist += dt * a.speed;
-      const pos = routePoint(a.road, a.dist);
-      place(a.mesh, pos, 3.1);
-      if (
-        Math.hypot(a.mesh.position.x - p.x, a.mesh.position.z - p.z) < 2.45 &&
-        Math.abs(a.mesh.position.y - p.y) < 2
-      )
-        hit = true;
+  playerDent(p, contact, severity) {
+    applyPanelDent(this.playerBody, { ...contact, severity });
+    p.dents = this.playerBody.userData.dents || [];
+  }
+  treeDent(p, tree, speed) {
+    this.playerDent(
+      p,
+      localContact(p, tree.x, tree.z),
+      Math.min(1, speed / 36),
+    );
+  }
+  stepTraffic(dt, p, mission, start) {
+    let hardest = 0;
+    const update = (mesh, body, target) => {
+      advanceTraffic(body, target, this.world.surface, dt);
+      const hit = collideTraffic(p, body);
+      if (hit) {
+        this.playerDent(p, hit.playerContact, hit.severity);
+        applyPanelDent(mesh, { ...hit.trafficContact, severity: hit.severity });
+        hardest = Math.max(hardest, hit.speed);
+      }
+      mesh.position.set(body.x, body.y, body.z);
+      mesh.rotation.y = body.heading;
+    };
+    for (const car of this.traffic) {
+      car.dist += dt * car.speed;
+      update(car.mesh, car.body, lanePose(routePoint(car.road, car.dist)));
     }
     this.rival.visible = mission?.event.id === "canyon";
-    if (this.rival.visible)
-      place(this.rival, routePoint(1, start + mission.rival), -2.5);
+    if (this.rival.visible) {
+      mission.rival += dt * (19 + Math.min(10, mission.elapsed * 0.2));
+      const target = lanePose(routePoint(1, start + mission.rival), -2.5);
+      this.rivalBody ??= trafficBody(target, 1410, this.rival.userData);
+      update(this.rival, this.rivalBody, target);
+      const lag =
+        (target.x - this.rivalBody.x) * -Math.sin(target.heading) +
+        (target.z - this.rivalBody.z) * -Math.cos(target.heading);
+      mission.rivalProgress = mission.rival - lag;
+    }
     this.interceptor.visible = mission?.event.id === "city";
-    let pursuit = Infinity;
     if (this.interceptor.visible) {
-      const v = this.interceptor.position,
-        dx = p.x - v.x,
-        dz = p.z - v.z;
-      pursuit = Math.hypot(dx, dz);
-      if (mission.status === "running" && pursuit > 2) {
-        const tail = this.trail.at(-1);
-        if (Math.hypot(p.x - tail.x, p.z - tail.z) > 3)
-          this.trail.push({ x: p.x, y: p.y, z: p.z });
-        const target = this.trail[0],
-          tx = target.x - v.x,
-          tz = target.z - v.z,
-          gap = Math.hypot(tx, tz),
-          amount = Math.min(
-            gap,
-            (18 + Math.min(17, mission.elapsed * 0.3)) * dt,
-          );
-        if (gap > 0.001) {
-          v.x += (tx / gap) * amount;
-          v.z += (tz / gap) * amount;
-          v.y += (target.y - v.y) * Math.min(1, amount / gap);
-        }
-        if (gap < 2 && this.trail.length > 1) this.trail.shift();
-      }
-      this.interceptor.rotation.y = Math.atan2(-dx, -dz);
+      const v = this.chaseTarget,
+        tail = this.trail.at(-1);
+      if (Math.hypot(p.x - tail.x, p.z - tail.z) > 3)
+        this.trail.push({ x: p.x, y: p.y, z: p.z });
+      const target = this.trail[0],
+        dx = target.x - v.x,
+        dz = target.z - v.z;
+      const gap = Math.hypot(dx, dz);
+      const amount = Math.min(
+        gap,
+        (18 + Math.min(17, mission.elapsed * 0.3)) * dt,
+      );
+      const ratio = gap > 0.001 ? amount / gap : 0;
+      this.chaseTarget = {
+        x: v.x + dx * ratio,
+        y: v.y + (target.y - v.y) * ratio,
+        z: v.z + dz * ratio,
+        heading: gap > 0.01 ? Math.atan2(-dx, -dz) : v.heading,
+      };
+      if (gap < 2 && this.trail.length > 1) this.trail.shift();
+      update(this.interceptor, this.pursuitBody, this.chaseTarget);
+    }
+    return hardest;
+  }
+  advance(dt, p, mission, waypoint, onCollect) {
+    this.time += dt;
+    const t = this.time;
+    const pursuit = this.interceptor.visible
+      ? Math.hypot(this.pursuitBody.x - p.x, this.pursuitBody.z - p.z)
+      : Infinity;
+    if (this.interceptor.visible)
       this.lightbar.material.color.setHex(
         Math.floor(t * 5) % 2 ? 0xfb3c34 : 0x388bff,
       );
-    }
-    this.gate.visible = Boolean(waypoint);
+    this.gate.visible = Boolean(mission && waypoint);
     if (waypoint) {
       place(this.gate, waypoint);
       this.gate.children[3].rotation.y = t;
     }
-    this.beacons.forEach((b) => {
-      b.visible = !mission;
-      b.rotation.y = t * 0.65;
-    });
+    this.beacons.update(p, mission, waypoint, t);
     for (const part of this.parts) {
       const m = part.mesh;
       if (!m.visible) continue;
@@ -424,7 +423,7 @@ export class RaceGraphics {
         onCollect(part.id);
       }
     }
-    return { hit, pursuit };
+    return { pursuit };
   }
   render(dt, p, night, waypoint, mission) {
     const t = this.time;
@@ -435,10 +434,11 @@ export class RaceGraphics {
         this.controller.index,
         t,
         night,
-        waypoint,
+        mission ? waypoint : null,
         this.fallbackTraffic,
         mission,
-        [...this.parts, ...this.beacons],
+        this.parts,
+        this.overlays,
       );
       return;
     }
@@ -487,8 +487,21 @@ export class RaceGraphics {
   dispose() {
     this.size.disconnect();
     this.software?.dispose();
+    this.marks.dispose();
+    this.beacons.dispose();
     this.effects?.dispose();
+    clearPanelDents(this.playerBody);
     this.car?.dispose();
+    for (const mesh of [
+      ...this.traffic.map((a) => a.mesh),
+      this.rival,
+      this.interceptor,
+    ]) {
+      mesh.removeFromParent();
+      disposeTrafficModel(mesh);
+    }
+    this.lightbar.geometry.dispose();
+    this.lightbar.material.dispose();
     this.world.dispose?.();
     const mats = new Set(),
       geos = new Set();

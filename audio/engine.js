@@ -47,6 +47,37 @@ export class GameAudio {
       0.08,
     );
   }
+  impact(relativeSpeed, wood = false) {
+    if (!this.enabled || !this.ctx || this.ctx.state !== "running") return;
+    const ctx = this.ctx,
+      t = ctx.currentTime;
+    if (!this.crunch) {
+      this.crunch = ctx.createBuffer(
+        1,
+        Math.ceil(ctx.sampleRate * 0.28),
+        ctx.sampleRate,
+      );
+      const samples = this.crunch.getChannelData(0);
+      for (let i = 0; i < samples.length; i++)
+        samples[i] = Math.random() * 2 - 1;
+    }
+    const noise = ctx.createBufferSource(),
+      filter = ctx.createBiquadFilter(),
+      gain = ctx.createGain();
+    noise.buffer = this.crunch;
+    filter.type = "bandpass";
+    filter.frequency.setValueAtTime(wood ? 1450 : 780, t);
+    filter.frequency.exponentialRampToValueAtTime(wood ? 290 : 95, t + 0.18);
+    gain.gain.setValueAtTime(0.018 + Math.min(1, relativeSpeed / 35) * 0.19, t);
+    gain.gain.exponentialRampToValueAtTime(0.0002, t + 0.24);
+    noise.connect(filter).connect(gain).connect(ctx.destination);
+    noise.onended = () => {
+      noise.disconnect();
+      filter.disconnect();
+      gain.disconnect();
+    };
+    noise.start(t);
+  }
   quiet() {
     if (this.ctx)
       this.master.gain.setTargetAtTime(0, this.ctx.currentTime, 0.045);

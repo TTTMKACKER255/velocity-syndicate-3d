@@ -8,9 +8,10 @@ import {
   tickMission,
 } from "./events.js";
 import { roads, spawn, routePoint, roadLengths } from "./world.js";
+import { locations, markerPoint } from "./locations.js";
 const dist = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
 export class Session {
-  constructor(container, profile, input, audio, hooks) {
+  constructor(container, profile, input, audio, hooks, origin = null) {
     this.input = input;
     this.profile = profile;
     this.audio = audio;
@@ -29,7 +30,12 @@ export class Session {
     this.lastPose = spawn;
     this.lastBump = -5;
     this.acc = 0;
-    this.place(spawn);
+    this.places = locations.map((item) => ({
+      item,
+      position: markerPoint(item, routePoint, roadLengths),
+    }));
+    const home = this.places.find((e) => e.item.id === "home");
+    this.place(origin || (profile.startAtHome ? home.position : spawn));
     this.input.active = true;
     this.input.clear();
     this.headlights = true;
@@ -100,11 +106,22 @@ export class Session {
         min = d;
       }
     }
+    // Facilities operate at the kerb. Prioritise one within reach over a distant event.
+    for (const { item, position } of this.places) {
+      const distance = dist(this.p, position);
+      if (
+        distance < 19 &&
+        Math.abs(this.p.y - position.height) < 4 &&
+        distance < min
+      )
+        return item;
+    }
     return min < 52 ? near : null;
   }
   interact() {
     const e = this.nearest();
-    if (e) this.start(e, false);
+    if (e?.landmark) this.hooks.visit(e);
+    else if (e) this.start(e, false);
   }
   pause(value) {
     this.paused = value;
@@ -187,24 +204,32 @@ export class Session {
           p.speed *= -0.2;
           p.travel = p.heading;
         }
+        if (hit.trees) {
+          const impactSpeed = Math.abs(p.speed);
+          if (hit.tree) this.graphics.treeDent(p, hit.tree, impactSpeed);
+          p.speed *= 0.68;
+          this.audio.impact(impactSpeed, true);
+          this.hooks.notice("Tree down");
+        }
+        const contact = this.graphics.stepTraffic(STEP, p, m, this.startAt);
+        if (contact && this.clock - this.lastBump > 0.65) {
+          this.audio.impact(contact);
+          this.hooks.notice("Traffic impact");
+          this.lastBump = this.clock;
+        }
         if (hit.boardId) boardHit = hit.boardId;
         if (hit.smashed) {
           p.nitro = Math.min(1, p.nitro + 0.06 * hit.smashed);
           this.hooks.notice("Prop smashed · nitro +6%");
         }
+        if (hit.solid) this.graphics.marks.breakTrail();
+        else this.graphics.marks.update(p);
         this.acc -= STEP;
       }
     }
     if (previousStage < 3 && p.boostStage === 3) this.hooks.shockwave();
     let wp = this.waypoint();
-    const traffic = this.graphics.advance(dt, p, m, this.startAt, wp, (i) =>
-      this.collect(i),
-    );
-    if (traffic.hit && this.clock - this.lastBump > 1.1) {
-      p.speed *= 0.42;
-      this.lastBump = this.clock;
-      this.hooks.notice("Traffic contact");
-    }
+    const traffic = this.graphics.advance(dt, p, m, wp, (i) => this.collect(i));
     if (m?.status === "running") {
       const passed = m.passed;
       tickMission(m, dt, p, wp || p, traffic.pursuit, boardHit);

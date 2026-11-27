@@ -158,7 +158,8 @@ export function tickMission(m, dt, p, waypoint, pursuit, boardHit = null) {
           dt * (pursuit < 9 && Math.abs(p.speed) < 20 ? 0.12 : -0.075),
       ),
     );
-  if (e.id === "canyon") m.rival += dt * (19 + Math.min(10, m.elapsed * 0.2));
+  if (e.id === "canyon" && m.rivalProgress === undefined)
+    m.rival += dt * (19 + Math.min(10, m.elapsed * 0.2));
   const hit = Math.hypot(p.x - waypoint.x, p.z - waypoint.z) < 23;
   if (e.id === "glass") {
     if (e.boards.includes(boardHit) && !m.broken.includes(boardHit)) {
@@ -178,7 +179,7 @@ export function tickMission(m, dt, p, waypoint, pursuit, boardHit = null) {
   else if (
     m.elapsed >= e.limit ||
     m.exposure >= 1 ||
-    (e.id === "canyon" && m.rival >= e.interval * e.count)
+    (e.id === "canyon" && (m.rivalProgress ?? m.rival) >= e.interval * e.count)
   )
     m.status = "lost";
 }
