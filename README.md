@@ -1,5 +1,9 @@
 # Velocity Syndicate
 
+[Play the game](https://velocity-syndicate-3d.vortex-arcad-1933.chatgpt.site/) · [Download the complete source and Git history](https://velocity-syndicate-3d.vortex-arcad-1933.chatgpt.site/downloads/velocity-syndicate-3d.zip)
+
+The download contains all 33 original commits through `c0148d6`. The hosted game and download require the project owner’s ChatGPT sign-in. This GitHub branch currently contains the project foundation.
+
 Velocity Syndicate is a browser-based 3D action-driving game set in Aurelia Bay. A rookie driver takes on a corporate racing syndicate across the coast, downtown and the canyon. The project uses original fictional vehicles.
 
 ## Foundation milestone
